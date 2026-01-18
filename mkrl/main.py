@@ -14,7 +14,7 @@ import webbrowser
 import time
 
 from stable_baselines3 import PPO
-from mkrl.web import create_dash_app
+from mkrl.web import create_static_html
 
 
 class TradingEnv(gym.Env):
@@ -141,7 +141,8 @@ def realistic_price_feed(
     return np.array(prices)
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the trading simulator."""
     # Generate synthetic price data
     prices = realistic_price_feed()
 
@@ -170,14 +171,18 @@ if __name__ == "__main__":
     print(f"Total P&L: ${metrics['total_pnl']:.2f}")
     print(f"Total Return: {metrics['total_return']:.2f}%")
     
-    # Create and run Dash app
-    app = create_dash_app(prices, actions, portfolio_values, metrics)
+    # Create static HTML file
+    print("\nGenerating static HTML report...")
+    html_file = create_static_html(prices, actions, portfolio_values, metrics)
+    html_path = Path(html_file).resolve()
     
-    print("\nStarting dashboard server...")
-    print("Dashboard running at http://0.0.0.0:8050/")
-    print("Access it at http://YOUR_SERVER_IP:8050/ from your browser")
-    print("Press Ctrl+C to stop the server")
+    print(f"HTML report saved to: {html_path}")
+    print("Opening in browser...")
     
-    # Run server on all interfaces
-    app.run(debug=False, host='0.0.0.0', port=8050)
+    # Open in external browser
+    webbrowser.open(html_path.as_uri())
+
+
+if __name__ == "__main__":
+    main()
     

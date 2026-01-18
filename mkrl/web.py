@@ -1,6 +1,5 @@
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-from dash import Dash, html, dcc
 
 
 def create_figure(prices, actions, portfolio_values, metrics):
@@ -106,71 +105,104 @@ def create_figure(prices, actions, portfolio_values, metrics):
     return fig
 
 
-def create_dash_app(prices, actions, portfolio_values, metrics):
-    app = Dash(__name__)
+def create_static_html(prices, actions, portfolio_values, metrics, output_file='trading_results.html'):
+    """Create a static HTML file with the trading results visualization."""
+    fig = create_figure(prices, actions, portfolio_values, metrics)
     pnl_color = '#4CAF50' if metrics['total_pnl'] >= 0 else '#f44336'
-    app.layout = html.Div(
-        style={'backgroundColor': '#1a1a1a', 'padding': '20px', 'fontFamily': 'Segoe UI, sans-serif'},
-        children=[
-            html.Div(
-                style={'maxWidth': '1400px', 'margin': '0 auto'},
-                children=[
-                    # Metrics grid
-                    html.Div(
-                        style={
-                            'background': '#2a2a2a',
-                            'padding': '20px',
-                            'borderRadius': '8px',
-                            'margin': '20px 0'
-                        },
-                        children=[
-                            html.H2(
-                                'Performance Metrics',
-                                style={'color': '#4CAF50', 'textAlign': 'center'}
-                            ),
-                            html.Div(
-                                style={
-                                    'display': 'grid',
-                                    'gridTemplateColumns': 'repeat(3, 1fr)',
-                                    'gap': '20px',
-                                    'marginTop': '20px'
-                                },
-                                children=[
-                                    html.Div([
-                                        html.Div('Initial Capital', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"${metrics['initial_capital']:.2f}", style={'color': '#e0e0e0', 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ]),
-                                    html.Div([
-                                        html.Div('Final Capital', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"${metrics['final_capital']:.2f}", style={'color': pnl_color, 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ]),
-                                    html.Div([
-                                        html.Div('Total P&L', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"${metrics['total_pnl']:.2f}", style={'color': pnl_color, 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ]),
-                                    html.Div([
-                                        html.Div('Max Drawdown', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"{metrics['max_drawdown']:.2f}%", style={'color': '#f44336', 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ]),
-                                    html.Div([
-                                        html.Div('Volatility', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"{metrics['volatility']:.2f}%", style={'color': '#e0e0e0', 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ]),
-                                    html.Div([
-                                        html.Div('Total Return', style={'color': '#888', 'fontSize': '14px', 'textAlign': 'center'}),
-                                        html.Div(f"{metrics['total_return']:.2f}%", style={'color': pnl_color, 'fontSize': '24px', 'fontWeight': 'bold', 'textAlign': 'center'})
-                                    ])
-                                ]
-                            )
-                        ]
-                    ),
-                    # Chart
-                    dcc.Graph(
-                        figure=create_figure(prices, actions, portfolio_values, metrics),
-                        config={'displayModeBar': True}
-                    )
-                ]
-            )
-        ]
-    )
-    return app
+    
+    # Create HTML content
+    html_content = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📈 RL Trading Strategy Results</title>
+    <style>
+        body {{
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+        }}
+        .metrics-grid {{
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }}
+        .metrics-title {{
+            color: #4CAF50;
+            text-align: center;
+            margin-bottom: 20px;
+        }}
+        .metrics-row {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }}
+        .metric-item {{
+            text-align: center;
+        }}
+        .metric-label {{
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: bold;
+        }}
+        .chart-container {{
+            margin: 20px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="metrics-grid">
+            <h2 class="metrics-title">Performance Metrics</h2>
+            <div class="metrics-row">
+                <div class="metric-item">
+                    <div class="metric-label">Initial Capital</div>
+                    <div class="metric-value" style="color: #e0e0e0;">${metrics['initial_capital']:.2f}</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Final Capital</div>
+                    <div class="metric-value" style="color: {pnl_color};">${metrics['final_capital']:.2f}</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Total P&L</div>
+                    <div class="metric-value" style="color: {pnl_color};">${metrics['total_pnl']:.2f}</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Max Drawdown</div>
+                    <div class="metric-value" style="color: #f44336;">{metrics['max_drawdown']:.2f}%</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Volatility</div>
+                    <div class="metric-value" style="color: #e0e0e0;">{metrics['volatility']:.2f}%</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Total Return</div>
+                    <div class="metric-value" style="color: {pnl_color};">{metrics['total_return']:.2f}%</div>
+                </div>
+            </div>
+        </div>
+        <div class="chart-container">
+            {fig.to_html(include_plotlyjs='cdn', div_id='plotly-chart', full_html=False)}
+        </div>
+    </div>
+</body>
+</html>'''
+    
+    # Write HTML to file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    return output_file

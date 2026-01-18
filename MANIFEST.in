@@ -1,0 +1,10 @@
+include README.md
+include requirements.txt
+include LICENSE
+recursive-exclude env *
+recursive-exclude __pycache__ *
+recursive-exclude *.pyc *
+recursive-exclude *.pyo *
+recursive-exclude .git *
+global-exclude *.pth
+global-exclude *.egg-info

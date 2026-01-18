@@ -23,6 +23,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Package build artifacts
+*.egg-info/
+build/
+dist/
+
 # Virtual Environment
 env/
 venv/
