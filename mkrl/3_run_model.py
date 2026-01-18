@@ -17,7 +17,8 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from stable_baselines3 import PPO
-from mkrl.main import TradingEnv, run_strategy, calculate_metrics
+from mkrl.env import TradingEnv
+from mkrl.utils import run_strategy, calculate_metrics
 from mkrl.web import create_static_html
 from mkrl.constants import (
     INITIAL_CAPITAL, MIN_NOTIONAL, MIN_SIZE, TRADING_FEE_RATE,

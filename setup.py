@@ -56,11 +56,6 @@ setup(
             "flake8>=6.0.0",
         ],
     },
-    entry_points={
-        "console_scripts": [
-            "mkrl-trade=mkrl.main:main",
-        ],
-    },
     include_package_data=True,
     zip_safe=False,
 )
