@@ -4,7 +4,10 @@ Trading environment for reinforcement learning.
 
 import gymnasium as gym
 import numpy as np
-from mkrl.constants import TRADE_EXECUTION_REWARD, MOMENTUM_REWARD_SCALE
+from mkrl.settings import (
+    trade_execution_reward, momentum_reward_scale,
+    profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio
+)
 
 
 class TradingEnv(gym.Env):
@@ -156,6 +159,81 @@ class TradingEnv(gym.Env):
             
         # Action 0 (HOLD) or invalid actions: do nothing
         
+        # ========================================================================
+        # CRITICAL: RULE-BASED POSITION MANAGEMENT (PRIMARY MECHANISM)
+        # These rules are PRIMARY and always apply on EVERY step to manage positions.
+        # They execute regardless of model action - this ensures active position management.
+        # ========================================================================
+        
+        # Track if position management rules triggered any trades
+        position_mgmt_executed = False
+        position_mgmt_action = None
+        
+        # Rules 1 & 2: Position management when we have holdings
+        # NOTE: These rules are CRITICAL for proper position management
+        if self.holdings > 0 and self.avg_entry_price > 0:
+            price_ratio = price / self.avg_entry_price
+            profit_pct = price_ratio - 1.0  # e.g., 1.10 = 10% profit
+            
+            # Rule 1: If price grows profit_threshold% from average entry, sell partial_sell_ratio% of position
+            if profit_pct >= profit_threshold:
+                # Calculate how much to sell (20% of current holdings)
+                shares_to_sell = self.holdings * partial_sell_ratio
+                # Ensure it meets minimum size and notional
+                shares_to_sell = max(shares_to_sell, self.min_size)
+                shares_to_sell = min(shares_to_sell, self.holdings)  # Don't sell more than we have
+                
+                notional = shares_to_sell * price
+                if notional >= self.min_notional and shares_to_sell > 0:
+                    # Execute automatic profit-taking sell
+                    fee = notional * self.trading_fee_rate
+                    proceeds = notional - fee
+                    
+                    # Update average entry price
+                    cost_basis_of_sold = self.total_cost_basis * (shares_to_sell / self.holdings)
+                    self.total_cost_basis -= cost_basis_of_sold
+                    self.holdings -= shares_to_sell
+                    if self.holdings > 0:
+                        self.avg_entry_price = self.total_cost_basis / self.holdings
+                    else:
+                        self.avg_entry_price = 0.0
+                        self.total_cost_basis = 0.0
+                    
+                    self.cash += proceeds
+                    self.cash = max(0, self.cash)
+                    # Track that position management rule executed a trade
+                    position_mgmt_executed = True
+                    position_mgmt_action = f"PROFIT_TAKE: Sold {shares_to_sell:.4f} @ ${price:.2f} ({partial_sell_ratio*100:.0f}% of position)"
+            
+            # Rule 2: If price goes down dca_threshold% from average entry, add dca_ratio% to position
+            elif profit_pct <= -dca_threshold:  # e.g., -0.10 = 10% down
+                # Calculate how much to add (10% of current position value, converted to shares)
+                current_position_value = self.holdings * price
+                target_add_value = current_position_value * dca_ratio
+                shares_to_add = target_add_value / price if price > 0 else 0
+                # Ensure it meets minimum size
+                shares_to_add = max(shares_to_add, self.min_size)
+                
+                notional = shares_to_add * price
+                fee = notional * self.trading_fee_rate
+                total_cost = notional + fee
+                
+                # Only add if we have enough cash and meet minimum notional
+                if self.cash >= total_cost and notional >= self.min_notional:
+                    # Execute automatic DCA buy
+                    self.holdings += shares_to_add
+                    self.cash -= total_cost
+                    self.cash = max(0, self.cash)
+                    
+                    # Update volume-weighted average entry price
+                    cost_this_trade = notional
+                    self.total_cost_basis += cost_this_trade
+                    if self.holdings > 0:
+                        self.avg_entry_price = self.total_cost_basis / self.holdings
+                    # Track that position management rule executed a trade
+                    position_mgmt_executed = True
+                    position_mgmt_action = f"DCA: Added {shares_to_add:.4f} @ ${price:.2f} ({dca_ratio*100:.0f}% of position value)"
+        
         self.current_step += 1
         done = self.current_step >= len(self.prices) - 1
         
@@ -195,23 +273,27 @@ class TradingEnv(gym.Env):
         
         # 1. Reward for executing trades (encourages exploration and learning)
         if action_executed:
-            reward += TRADE_EXECUTION_REWARD
+            reward += trade_execution_reward
+        
+        # 1b. Reward for position management rule trades (critical for position management)
+        if position_mgmt_executed:
+            reward += trade_execution_reward  # Same reward as model trades - position mgmt is equally important
         
         # 4. Momentum-based reward shaping (bonus for trading in the direction of price movement)
         if self.current_step > 0:
             price_change_pct = (price - prev_price) / prev_price if prev_price > 0 else 0.0
             if action == 1 and action_executed and price_change_pct > 0:  # Buy when price rising
-                momentum_bonus = MOMENTUM_REWARD_SCALE * abs(price_change_pct) * 100  # Scale by momentum strength
+                momentum_bonus = momentum_reward_scale * abs(price_change_pct) * 100  # Scale by momentum strength
                 reward += momentum_bonus
             elif action == 2 and action_executed and price_change_pct < 0:  # Sell when price falling
-                momentum_bonus = MOMENTUM_REWARD_SCALE * abs(price_change_pct) * 100
+                momentum_bonus = momentum_reward_scale * abs(price_change_pct) * 100
                 reward += momentum_bonus
             # Small penalty for trading against momentum (discourages bad timing)
             elif action == 1 and action_executed and price_change_pct < 0:  # Buy when price falling
-                momentum_penalty = -MOMENTUM_REWARD_SCALE * 0.5 * abs(price_change_pct) * 100
+                momentum_penalty = -momentum_reward_scale * 0.5 * abs(price_change_pct) * 100
                 reward += momentum_penalty
             elif action == 2 and action_executed and price_change_pct > 0:  # Sell when price rising
-                momentum_penalty = -MOMENTUM_REWARD_SCALE * 0.5 * abs(price_change_pct) * 100
+                momentum_penalty = -momentum_reward_scale * 0.5 * abs(price_change_pct) * 100
                 reward += momentum_penalty
         
         # Add bonus at episode end based on total P&L (shape final behavior)
@@ -228,4 +310,10 @@ class TradingEnv(gym.Env):
             position_penalty = -5.0 * (1 - steps_remaining_ratio) * position_ratio
             reward += position_penalty
         
-        return self._get_obs(), reward, terminated, truncated, {}
+        # Include position management info in info dict for logging/tracking
+        info = {}
+        if position_mgmt_executed:
+            info['position_mgmt_action'] = position_mgmt_action
+            info['position_mgmt_triggered'] = True
+        
+        return self._get_obs(), reward, terminated, truncated, info

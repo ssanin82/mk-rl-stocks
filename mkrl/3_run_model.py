@@ -20,9 +20,9 @@ from stable_baselines3 import PPO
 from mkrl.env import TradingEnv
 from mkrl.utils import run_strategy, calculate_metrics
 from mkrl.web import create_static_html
-from mkrl.constants import (
-    INITIAL_CAPITAL, MIN_NOTIONAL, MIN_SIZE, TRADING_FEE_RATE,
-    DEFAULT_PRICES_FILE, DEFAULT_MODEL_FILE, TRAIN_SPLIT_RATIO
+from mkrl.settings import (
+    initial_capital, min_notional, min_size, trading_fee_rate,
+    default_prices_file, default_model_file, train_split_ratio
 )
 
 
@@ -51,12 +51,12 @@ def load_prices(prices_file):
 def main():
     """Run the model on last 10% of prices."""
     parser = argparse.ArgumentParser(description='Run trained RL trading model')
-    parser.add_argument('--prices', '-p', type=str, default=DEFAULT_PRICES_FILE,
-                        help=f'Input prices file (default: {DEFAULT_PRICES_FILE})')
-    parser.add_argument('--model', '-m', type=str, default=DEFAULT_MODEL_FILE,
-                        help=f'Input model file (default: {DEFAULT_MODEL_FILE})')
-    parser.add_argument('--split', type=float, default=TRAIN_SPLIT_RATIO,
-                        help=f'Training split ratio - test uses remaining (default: {TRAIN_SPLIT_RATIO})')
+    parser.add_argument('--prices', '-p', type=str, default=default_prices_file,
+                        help=f'Input prices file (default: {default_prices_file})')
+    parser.add_argument('--model', '-m', type=str, default=default_model_file,
+                        help=f'Input model file (default: {default_model_file})')
+    parser.add_argument('--split', type=float, default=train_split_ratio,
+                        help=f'Training split ratio - test uses remaining (default: {train_split_ratio})')
     
     args = parser.parse_args()
     
@@ -83,10 +83,10 @@ def main():
     print("\nCreating test environment...")
     env_test = TradingEnv(
         test_prices,
-        initial_capital=INITIAL_CAPITAL,
-        min_notional=MIN_NOTIONAL,
-        min_size=MIN_SIZE,
-        trading_fee_rate=TRADING_FEE_RATE
+        initial_capital=initial_capital,
+        min_notional=min_notional,
+        min_size=min_size,
+        trading_fee_rate=trading_fee_rate
     )
     
     # Run strategy
@@ -122,7 +122,7 @@ def main():
     print(f"✓ Execution complete! Took {round(execution_time, 3)} seconds")
     
     # Calculate metrics
-    metrics = calculate_metrics(portfolio_values, INITIAL_CAPITAL)
+    metrics = calculate_metrics(portfolio_values, initial_capital)
     
     print(f"\nResults:")
     print(f"Initial Capital: ${metrics['initial_capital']:.2f}")

@@ -19,9 +19,9 @@ if __name__ == "__main__":
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from mkrl.env import TradingEnv
-from mkrl.constants import (
-    INITIAL_CAPITAL, MIN_NOTIONAL, MIN_SIZE, TRADING_FEE_RATE,
-    TRAINING_EPISODES, DEFAULT_PRICES_FILE, DEFAULT_MODEL_FILE, TRAIN_SPLIT_RATIO
+from mkrl.settings import (
+    initial_capital, min_notional, min_size, trading_fee_rate,
+    training_episodes, default_prices_file, default_model_file, train_split_ratio
 )
 
 
@@ -99,14 +99,14 @@ class TrainingProgressCallback(BaseCallback):
 def main():
     """Train the model on first 90% of prices."""
     parser = argparse.ArgumentParser(description='Train RL trading model')
-    parser.add_argument('--prices', '-p', type=str, default=DEFAULT_PRICES_FILE,
-                        help=f'Input prices file (default: {DEFAULT_PRICES_FILE})')
-    parser.add_argument('--model', '-m', type=str, default=DEFAULT_MODEL_FILE,
-                        help=f'Output model file (default: {DEFAULT_MODEL_FILE})')
-    parser.add_argument('--episodes', '-e', type=int, default=TRAINING_EPISODES,
-                        help=f'Number of training episodes (default: {TRAINING_EPISODES})')
-    parser.add_argument('--split', type=float, default=TRAIN_SPLIT_RATIO,
-                        help=f'Training split ratio (default: {TRAIN_SPLIT_RATIO})')
+    parser.add_argument('--prices', '-p', type=str, default=default_prices_file,
+                        help=f'Input prices file (default: {default_prices_file})')
+    parser.add_argument('--model', '-m', type=str, default=default_model_file,
+                        help=f'Output model file (default: {default_model_file})')
+    parser.add_argument('--episodes', '-e', type=int, default=training_episodes,
+                        help=f'Number of training episodes (default: {training_episodes})')
+    parser.add_argument('--split', type=float, default=train_split_ratio,
+                        help=f'Training split ratio (default: {train_split_ratio})')
     
     args = parser.parse_args()
     
@@ -129,10 +129,10 @@ def main():
     print("\nCreating training environment...")
     env_train = TradingEnv(
         train_prices,
-        initial_capital=INITIAL_CAPITAL,
-        min_notional=MIN_NOTIONAL,
-        min_size=MIN_SIZE,
-        trading_fee_rate=TRADING_FEE_RATE
+        initial_capital=initial_capital,
+        min_notional=min_notional,
+        min_size=min_size,
+        trading_fee_rate=trading_fee_rate
     )
     
     # Create and train model

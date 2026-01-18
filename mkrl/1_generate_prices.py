@@ -14,7 +14,7 @@ if __name__ == "__main__":
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from mkrl.constants import N_PRICE_POINTS, DEFAULT_PRICES_FILE
+from mkrl.settings import n_price_points, default_prices_file
 
 
 def realistic_price_feed(
@@ -25,7 +25,7 @@ def realistic_price_feed(
     beta=0.9,       # volatility persistence
     jump_prob=0.01,
     jump_scale=0.05,
-    n=N_PRICE_POINTS,
+    n=n_price_points,
     seed=42
 ):
     """Generate realistic price feed using GARCH-like model."""
@@ -55,10 +55,10 @@ def realistic_price_feed(
 def main():
     """Generate prices and save to file."""
     parser = argparse.ArgumentParser(description='Generate synthetic price data')
-    parser.add_argument('--output', '-o', type=str, default=DEFAULT_PRICES_FILE,
-                        help=f'Output file path (default: {DEFAULT_PRICES_FILE})')
-    parser.add_argument('--n-points', '-n', type=int, default=N_PRICE_POINTS,
-                        help=f'Number of price points to generate (default: {N_PRICE_POINTS})')
+    parser.add_argument('--output', '-o', type=str, default=default_prices_file,
+                        help=f'Output file path (default: {default_prices_file})')
+    parser.add_argument('--n-points', '-n', type=int, default=n_price_points,
+                        help=f'Number of price points to generate (default: {n_price_points})')
     parser.add_argument('--seed', '-s', type=int, default=42,
                         help='Random seed (default: 42)')
     

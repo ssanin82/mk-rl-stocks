@@ -15,13 +15,13 @@ if __name__ == "__main__":
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from mkrl.constants import N_PRICE_POINTS
+from mkrl.settings import n_price_points
 
 BASE_URL = "https://fapi.binance.com"
 SYMBOL = "BTCUSDT"
 INTERVAL = "1m"
 LIMIT = 1000  # Binance API limit per request
-TOTAL_KLINES = N_PRICE_POINTS
+TOTAL_KLINES = n_price_points
 OUTPUT_FILE = "btc_usdt_1m_prices.txt"
 
 

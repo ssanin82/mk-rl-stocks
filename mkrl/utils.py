@@ -11,10 +11,11 @@ def run_strategy(env, model, log_file=None):
     actions = []
     portfolio_values = []
     trades = []  # Store trade details
+    prev_price = None  # Track previous price for price move calculations
     
     if log_file:
-        log_file.write(f"{'Step':<6} {'Price':<10} {'Action':<8} {'Cash':<12} {'Holdings':<12} {'Portfolio':<12} {'Note':<20}\n")
-        log_file.write("-" * 90 + "\n")
+        log_file.write(f"{'Step':<6} {'Price':<10} {'Move %':<10} {'Move $':<10} {'Action':<8} {'Cash':<12} {'Position':<12} {'Holdings':<12} {'Portfolio':<12} {'Note':<20}\n")
+        log_file.write("-" * 120 + "\n")
     
     done = False
     while not done:
@@ -39,24 +40,55 @@ def run_strategy(env, model, log_file=None):
         cash_before = env.cash
         holdings_before = env.holdings
         
+        # Calculate price move
+        if prev_price is not None:
+            price_move_dollar = price - prev_price
+            price_move_pct = (price_move_dollar / prev_price) * 100 if prev_price > 0 else 0.0
+        else:
+            price_move_dollar = 0.0
+            price_move_pct = 0.0
+        
         # Execute action
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         
+        # Check if position management rules triggered a trade
+        position_mgmt_triggered = info.get('position_mgmt_triggered', False)
+        position_mgmt_action = info.get('position_mgmt_action', None)
+        
         # Record state after action
         cash_after = env.cash
         holdings_after = env.holdings
+        position = holdings_after  # Position is the same as holdings
         # Use current price (step() increments current_step, so use the price at current_step if valid, otherwise last price)
         current_price_idx = min(env.current_step, len(env.prices) - 1)
         portfolio_after = env.cash + env.holdings * env.prices[current_price_idx]
         portfolio_values.append(portfolio_after)
         
+        # Update previous price for next iteration
+        prev_price = price
+        
         # Log action details
         if log_file:
             action_name = ["HOLD", "BUY", "SELL"][action]
             note = ""
+            
+            # Check if position management rules executed a trade
+            if position_mgmt_triggered and position_mgmt_action:
+                note = f"[POSITION_MGMT: {position_mgmt_action}]"
+                # Add trade info for position management trades
+                if "PROFIT_TAKE" in position_mgmt_action:
+                    # Extract shares sold from holdings change
+                    shares_sold = holdings_before - holdings_after
+                    if shares_sold > 0:
+                        trades.append({"step": len(actions)-1, "type": "SELL (AUTO)", "price": price, "shares": shares_sold})
+                elif "DCA" in position_mgmt_action:
+                    # Extract shares bought from holdings change
+                    shares_bought_auto = holdings_after - holdings_before
+                    if shares_bought_auto > 0:
+                        trades.append({"step": len(actions)-1, "type": "BUY (AUTO)", "price": price, "shares": shares_bought_auto})
             # Show if action was filtered (converted from invalid action to HOLD)
-            if original_action != action:
+            elif original_action != action:
                 original_action_name = ["HOLD", "BUY", "SELL"][original_action]
                 if original_action == 2:
                     note = f"[FILTERED: {original_action_name}->HOLD - no holdings]"
@@ -95,7 +127,17 @@ def run_strategy(env, model, log_file=None):
                         # Shouldn't happen, but log it
                         note = f"SELL invalid: insufficient holdings"
             
-            log_file.write(f"{len(actions)-1:<6} ${price:<9.2f} {action_name:<8} ${cash_after:<11.2f} {holdings_after:<12.4f} ${portfolio_after:<11.2f} {note}\n")
+            log_file.write(
+                f"{len(actions)-1:<6} ${price:<9.2f} "
+                f"{price_move_pct:>+8.4f}% "
+                f"${price_move_dollar:>+9.2f} "
+                f"{action_name:<8} "
+                f"${cash_after:<11.2f} "
+                f"{position:<12.4f} "
+                f"{holdings_after:<12.4f} "
+                f"${portfolio_after:<11.2f} "
+                f"{note}\n"
+            )
     
     # Verify position is zero at the end
     final_position = env.holdings

@@ -9,7 +9,7 @@ __version__ = "0.1.0"
 
 from mkrl.env import TradingEnv
 from mkrl.utils import run_strategy, calculate_metrics
-from mkrl.constants import N_PRICE_POINTS
+from mkrl.settings import n_price_points
 
 # Import realistic_price_feed from 1_generate_prices for backward compatibility
 def realistic_price_feed(
@@ -20,7 +20,7 @@ def realistic_price_feed(
     beta=0.9,
     jump_prob=0.01,
     jump_scale=0.05,
-    n=N_PRICE_POINTS,
+    n=n_price_points,
     seed=42
 ):
     """Generate realistic price feed using GARCH-like model."""

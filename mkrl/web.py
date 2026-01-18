@@ -26,10 +26,23 @@ def create_figure(prices, actions, portfolio_values, metrics):
     )
     
     # Price chart - only plot up to actions length
+    # Set y-axis range to min-max of prices with padding for better visualization
+    price_min = min(prices) if len(prices) > 0 else 0
+    price_max = max(prices) if len(prices) > 0 else 0
+    price_range = price_max - price_min
+    # Add 2% padding above and below
+    y_padding = price_range * 0.02 if price_range > 0 else price_min * 0.01
+    
     fig.add_trace(
         go.Scatter(x=list(range(len(prices))), y=prices, name="Stock Price",
                   line=dict(color='#2196F3', width=2), fill='tozeroy',
                   fillcolor='rgba(33, 150, 243, 0.1)'),
+        row=1, col=1
+    )
+    
+    # Set y-axis range for price chart to show only min-max range (not from 0)
+    fig.update_yaxes(
+        range=[max(0, price_min - y_padding), price_max + y_padding],
         row=1, col=1
     )
     
