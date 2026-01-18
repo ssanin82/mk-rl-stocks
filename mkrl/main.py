@@ -15,24 +15,11 @@ import time
 
 from stable_baselines3 import PPO
 from mkrl.web import create_static_html
-
-# Configuration constants
-N_PRICE_POINTS = 10000  # Total number of price points to generate
-INITIAL_CAPITAL = 5000  # Strategy's starting capital in dollars
-MIN_NOTIONAL = 5.0  # Minimum dollar amount per trade (price * shares)
-MIN_SIZE = 0.1  # Minimum number of shares per trade
-TRADING_FEE_RATE = 0.0001  # Trading fee as fraction (reduced for better learning: 0.01% = 0.0001)
-TRAINING_TIMESTEPS = 200000  # Number of training timesteps (more = better learning)
-
-# Reward shaping parameters
-TRADE_EXECUTION_REWARD = 0.01  # Small positive reward for executing a valid trade (encourages exploration)
-MOMENTUM_REWARD_SCALE = 0.05  # Bonus for trading in the direction of price momentum
-
-# Position management thresholds (configurable)
-PROFIT_THRESHOLD = 0.10  # 10% profit threshold for partial sell
-PARTIAL_SELL_RATIO = 0.20  # Sell 20% of position when profit threshold reached
-DCA_THRESHOLD = 0.10  # 10% down from average entry for adding to position
-DCA_RATIO = 0.10  # Add 10% to position when down threshold reached
+from mkrl.constants import (
+    N_PRICE_POINTS, INITIAL_CAPITAL, MIN_NOTIONAL, MIN_SIZE, TRADING_FEE_RATE,
+    TRAINING_EPISODES, TRADE_EXECUTION_REWARD, MOMENTUM_REWARD_SCALE,
+    PROFIT_THRESHOLD, PARTIAL_SELL_RATIO, DCA_THRESHOLD, DCA_RATIO
+)
 
 
 class TradingEnv(gym.Env):
@@ -426,16 +413,21 @@ def main():
     all_prices = realistic_price_feed()
     
     # Split into training (90%) and testing (10%) sets
-    split_idx = int(len(all_prices) * 0.9)
+    from mkrl.constants import TRAIN_SPLIT_RATIO
+    split_idx = int(len(all_prices) * TRAIN_SPLIT_RATIO)
     train_prices = all_prices[:split_idx]
     test_prices = all_prices[split_idx:]
     
     print(f"Generated {len(all_prices)} price points")
-    print(f"Training set: {len(train_prices)} price points (first 90%)")
-    print(f"Testing set: {len(test_prices)} price points (last 10%)")
+    print(f"Training set: {len(train_prices)} price points (first {TRAIN_SPLIT_RATIO*100:.0f}%)")
+    print(f"Testing set: {len(test_prices)} price points (last {(1-TRAIN_SPLIT_RATIO)*100:.0f}%)")
 
+    # Calculate training timesteps: one episode = one pass through all training prices
+    training_timesteps = len(train_prices) * TRAINING_EPISODES
+    
     # Train RL agent on training data
-    print("\nTraining RL agent on training data...")
+    print(f"\nTraining RL agent on training data...")
+    print(f"Training for {TRAINING_EPISODES} episodes = {training_timesteps} timesteps")
     ts = time.time()
     env_train = TradingEnv(
         train_prices,
@@ -459,7 +451,7 @@ def main():
         vf_coef=0.5,
         max_grad_norm=0.5,
     )
-    model.learn(total_timesteps=TRAINING_TIMESTEPS)
+    model.learn(total_timesteps=training_timesteps)
     print(f"Training complete! Took {round(time.time() - ts, 3)} seconds")
     
     # Run strategy on test data
