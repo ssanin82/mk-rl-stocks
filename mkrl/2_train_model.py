@@ -20,7 +20,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from mkrl.env import TradingEnv
 from mkrl.settings import (
-    initial_capital, min_notional, min_size, trading_fee_rate,
+    initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
     training_episodes, default_prices_file, default_model_file, train_split_ratio
 )
 
@@ -48,7 +48,7 @@ def load_prices(prices_file):
 
 
 class TrainingProgressCallback(BaseCallback):
-    """Callback to log training progress to file and console."""
+    """Callback to log training progress to file and console with in-place updates."""
     
     def __init__(self, log_file, total_timesteps, verbose=0):
         super().__init__(verbose)
@@ -56,10 +56,21 @@ class TrainingProgressCallback(BaseCallback):
         self.total_timesteps = total_timesteps
         self.start_time = time.time()
         self.last_log_time = self.start_time
+        self.header_printed = False
         
+    def _print_header(self):
+        """Print the header frame once."""
+        if not self.header_printed:
+            print("\n" + "=" * 80)
+            print("Training Progress")
+            print("=" * 80)
+            self.header_printed = True
+    
     def _on_step(self) -> bool:
         # Log every 1000 steps or at major milestones
         if self.num_timesteps % 1000 == 0 or self.num_timesteps == self.total_timesteps:
+            self._print_header()
+            
             elapsed = time.time() - self.start_time
             progress = (self.num_timesteps / self.total_timesteps) * 100
             
@@ -74,22 +85,31 @@ class TrainingProgressCallback(BaseCallback):
                 eta_str = "calculating..."
                 speed_str = "calculating..."
             
-            log_line = (
+            # Format elapsed time
+            elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+            
+            # Create progress line
+            progress_line = (
                 f"Step {self.num_timesteps:,}/{self.total_timesteps:,} "
                 f"({progress:.1f}%) | "
-                f"Elapsed: {int(elapsed // 60)}m {int(elapsed % 60)}s | "
+                f"Elapsed: {elapsed_str} | "
                 f"ETA: {eta_str} | "
                 f"Speed: {speed_str}"
             )
             
             # Write to log file
             if self.log_file:
-                self.log_file.write(f"{log_line}\n")
+                self.log_file.write(f"{progress_line}\n")
                 self.log_file.flush()
             
-            # Also print to console every 5% progress
-            if int(progress) % 5 == 0 or self.num_timesteps == self.total_timesteps:
-                print(f"  {log_line}")
+            # Print to console with carriage return for in-place update
+            # Use \r to return to start of line and padding to clear previous content
+            # Add extra spaces at the end to clear any leftover characters from previous updates
+            print(f"\r{progress_line}" + " " * 20, end="", flush=True)
+            
+            # Print newline when training is complete
+            if self.num_timesteps >= self.total_timesteps:
+                print()  # Final newline
             
             self.last_log_time = time.time()
         
@@ -132,12 +152,13 @@ def main():
         initial_capital=initial_capital,
         min_notional=min_notional,
         min_size=min_size,
-        trading_fee_rate=trading_fee_rate
+        trading_fee_rate=trading_fee_rate,
+        lot_size=lot_size
     )
     
     # Create and train model
     print(f"\nTraining PPO model for {training_timesteps} timesteps ({args.episodes} episodes)...")
-    print("  (This may take several minutes...)")
+    print("(This may take several minutes...)\n")
     ts = time.time()
     
     # Create log file for training progress

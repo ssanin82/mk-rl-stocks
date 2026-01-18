@@ -21,7 +21,7 @@ from mkrl.env import TradingEnv
 from mkrl.utils import run_strategy, calculate_metrics
 from mkrl.web import create_static_html
 from mkrl.settings import (
-    initial_capital, min_notional, min_size, trading_fee_rate,
+    initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
     default_prices_file, default_model_file, train_split_ratio
 )
 
@@ -86,7 +86,8 @@ def main():
         initial_capital=initial_capital,
         min_notional=min_notional,
         min_size=min_size,
-        trading_fee_rate=trading_fee_rate
+        trading_fee_rate=trading_fee_rate,
+        lot_size=lot_size
     )
     
     # Run strategy
@@ -98,7 +99,21 @@ def main():
         log_file.write("=" * 90 + "\n")
         log_file.write("TRADING REPORT\n")
         log_file.write("=" * 90 + "\n\n")
-        actions, portfolio_values, trades = run_strategy(env_test, model, log_file=log_file)
+        actions, portfolio_values, trades, force_sell_index = run_strategy(env_test, model, log_file=log_file)
+        
+        # Calculate metrics
+        metrics = calculate_metrics(portfolio_values, initial_capital)
+        
+        # Performance metrics
+        log_file.write("\n" + "=" * 90 + "\n")
+        log_file.write("PERFORMANCE METRICS\n")
+        log_file.write("=" * 90 + "\n")
+        log_file.write(f"Initial Capital: ${metrics['initial_capital']:.2f}\n")
+        log_file.write(f"Final Capital:   ${metrics['final_capital']:.2f}\n")
+        log_file.write(f"Total P&L:       ${metrics['total_pnl']:.2f}\n")
+        log_file.write(f"Total Return:    {metrics['total_return']:.2f}%\n")
+        log_file.write(f"Max Drawdown:    {metrics['max_drawdown']:.2f}%\n")
+        log_file.write(f"Volatility:      {metrics['volatility']:.2f}%\n")
         
         # Summary statistics
         log_file.write("\n" + "=" * 90 + "\n")
@@ -121,7 +136,7 @@ def main():
     execution_time = time.time() - ts
     print(f"✓ Execution complete! Took {round(execution_time, 3)} seconds")
     
-    # Calculate metrics
+    # Calculate metrics (for console output)
     metrics = calculate_metrics(portfolio_values, initial_capital)
     
     print(f"\nResults:")
@@ -143,7 +158,7 @@ def main():
     
     # Create static HTML file
     print("\nGenerating static HTML report...")
-    html_file = create_static_html(test_prices, actions, portfolio_values, metrics)
+    html_file = create_static_html(test_prices, actions, portfolio_values, metrics, force_sell_index=force_sell_index)
     html_path = Path(html_file).resolve()
     
     print(f"HTML report saved to: {html_path}")

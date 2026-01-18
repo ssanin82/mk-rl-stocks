@@ -2,7 +2,7 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
 
-def create_figure(prices, actions, portfolio_values, metrics):
+def create_figure(prices, actions, portfolio_values, metrics, force_sell_index=None):
     # Ensure prices and actions are aligned - use minimum length
     min_len = min(len(prices), len(actions))
     prices = prices[:min_len]
@@ -41,8 +41,10 @@ def create_figure(prices, actions, portfolio_values, metrics):
     )
     
     # Set y-axis range for price chart to show only min-max range (not from 0)
+    # fixedrange=True prevents autoscale from resetting the y-axis to start from 0
     fig.update_yaxes(
         range=[max(0, price_min - y_padding), price_max + y_padding],
+        fixedrange=True,  # Lock y-axis range, allow x-axis autoscaling
         row=1, col=1
     )
     
@@ -64,11 +66,35 @@ def create_figure(prices, actions, portfolio_values, metrics):
             row=1, col=1
         )
     
+    # Force-sell signal - show the last force-sell point if it exists
+    if force_sell_index is not None and force_sell_index < len(prices):
+        fig.add_trace(
+            go.Scatter(x=[force_sell_index], y=[prices[force_sell_index]],
+                      mode='markers', name='Force Sell',
+                      marker=dict(color='#FF9800', size=16, symbol='x', line=dict(width=2, color='#FF5722'))),
+            row=1, col=1
+        )
+    
     # Portfolio value chart
+    # Set y-axis range to min-max of portfolio values with padding for better visualization
+    portfolio_min = min(portfolio_values) if len(portfolio_values) > 0 else 0
+    portfolio_max = max(portfolio_values) if len(portfolio_values) > 0 else 0
+    portfolio_range = portfolio_max - portfolio_min
+    # Add 2% padding above and below
+    portfolio_y_padding = portfolio_range * 0.02 if portfolio_range > 0 else portfolio_min * 0.01
+    
     fig.add_trace(
         go.Scatter(x=list(range(len(portfolio_values))), y=portfolio_values,
                   name="Portfolio Value", line=dict(color='#4CAF50', width=2),
                   fill='tozeroy', fillcolor='rgba(76, 175, 80, 0.1)'),
+        row=2, col=1
+    )
+    
+    # Set y-axis range for portfolio chart to show only min-max range (not from 0)
+    # fixedrange=True prevents autoscale from resetting the y-axis to start from 0
+    fig.update_yaxes(
+        range=[max(0, portfolio_min - portfolio_y_padding), portfolio_max + portfolio_y_padding],
+        fixedrange=True,  # Lock y-axis range, allow x-axis autoscaling
         row=2, col=1
     )
     
@@ -125,9 +151,9 @@ def create_figure(prices, actions, portfolio_values, metrics):
     return fig
 
 
-def create_static_html(prices, actions, portfolio_values, metrics, output_file='trading_results.html'):
+def create_static_html(prices, actions, portfolio_values, metrics, output_file='trading_results.html', force_sell_index=None):
     """Create a static HTML file with the trading results visualization."""
-    fig = create_figure(prices, actions, portfolio_values, metrics)
+    fig = create_figure(prices, actions, portfolio_values, metrics, force_sell_index)
     pnl_color = '#4CAF50' if metrics['total_pnl'] >= 0 else '#f44336'
     
     # Create HTML content

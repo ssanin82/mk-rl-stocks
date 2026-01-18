@@ -12,10 +12,11 @@ def run_strategy(env, model, log_file=None):
     portfolio_values = []
     trades = []  # Store trade details
     prev_price = None  # Track previous price for price move calculations
+    force_sell_index = None  # Track the last force-sell step
     
     if log_file:
-        log_file.write(f"{'Step':<6} {'Price':<10} {'Move %':<10} {'Move $':<10} {'Action':<8} {'Cash':<12} {'Position':<12} {'Holdings':<12} {'Portfolio':<12} {'Note':<20}\n")
-        log_file.write("-" * 120 + "\n")
+        log_file.write(f"{'Step':<6} {'Price':<10} {'Move %':<10} {'Move $':<10} {'Action':<7} {'Flag':<7} {'Qty':<10} {'Cash':<12} {'Position':<12} {'Portfolio':<12} {'AEP':<10}\n")
+        log_file.write("-" * 110 + "\n")
     
     done = False
     while not done:
@@ -56,6 +57,11 @@ def run_strategy(env, model, log_file=None):
         position_mgmt_triggered = info.get('position_mgmt_triggered', False)
         position_mgmt_action = info.get('position_mgmt_action', None)
         
+        # Check if force-sell happened at the end
+        force_sell_executed = info.get('force_sell_executed', False)
+        force_sell_shares = info.get('force_sell_shares', 0.0)
+        force_sell_price = info.get('force_sell_price', price)
+        
         # Record state after action
         cash_after = env.cash
         holdings_after = env.holdings
@@ -70,73 +76,70 @@ def run_strategy(env, model, log_file=None):
         
         # Log action details
         if log_file:
-            action_name = ["HOLD", "BUY", "SELL"][action]
-            note = ""
+            # Determine flag: "FORCE" for force-sell, "AUTO" for auto trades, empty otherwise
+            flag = ""
+            qty = 0.0  # Quantity traded (positive for buys, negative for sells, 0 for holds)
             
+            # Check if force-sell executed (highest priority for logging)
+            if force_sell_executed:
+                action_name = "SELL"  # Force-sell should show as SELL, not HOLD
+                flag = "FORCE"
+                qty = -force_sell_shares  # Negative for sells
+                force_sell_index = len(actions) - 1  # Track the force-sell step
+                trades.append({"step": len(actions)-1, "type": "SELL (FORCE)", "price": force_sell_price, "shares": force_sell_shares})
             # Check if position management rules executed a trade
-            if position_mgmt_triggered and position_mgmt_action:
-                note = f"[POSITION_MGMT: {position_mgmt_action}]"
-                # Add trade info for position management trades
-                if "PROFIT_TAKE" in position_mgmt_action:
+            elif position_mgmt_triggered and position_mgmt_action:
+                flag = "AUTO"
+                # Determine action name based on position management type
+                if "PROFIT_TAKE" in position_mgmt_action or "SELL" in position_mgmt_action:
+                    action_name = "SELL"
                     # Extract shares sold from holdings change
                     shares_sold = holdings_before - holdings_after
                     if shares_sold > 0:
+                        qty = -shares_sold  # Negative for sells
                         trades.append({"step": len(actions)-1, "type": "SELL (AUTO)", "price": price, "shares": shares_sold})
-                elif "DCA" in position_mgmt_action:
+                elif "DCA" in position_mgmt_action or "BUY" in position_mgmt_action:
+                    action_name = "BUY"
                     # Extract shares bought from holdings change
                     shares_bought_auto = holdings_after - holdings_before
                     if shares_bought_auto > 0:
+                        qty = shares_bought_auto  # Positive for buys
                         trades.append({"step": len(actions)-1, "type": "BUY (AUTO)", "price": price, "shares": shares_bought_auto})
+                else:
+                    action_name = ["HOLD", "BUY", "SELL"][action]
             # Show if action was filtered (converted from invalid action to HOLD)
             elif original_action != action:
-                original_action_name = ["HOLD", "BUY", "SELL"][original_action]
-                if original_action == 2:
-                    note = f"[FILTERED: {original_action_name}->HOLD - no holdings]"
-                elif original_action == 1:
-                    note = f"[FILTERED: {original_action_name}->HOLD - insufficient cash]"
-                # Action was filtered to HOLD, so skip detailed logging
+                action_name = "HOLD"  # Action was filtered to HOLD
+                # No quantity traded
             elif action == 1:  # Buy
+                action_name = "BUY"
                 if cash_after < cash_before:  # Trade executed (cash decreased)
                     shares_bought = holdings_after - holdings_before
-                    notional = shares_bought * price
-                    fee = notional * env.trading_fee_rate
-                    avg_entry = env.avg_entry_price if env.holdings > 0 else 0.0
-                    note = f"Bought {shares_bought:.4f} @ ${price:.2f}, avg_entry=${avg_entry:.2f}"
+                    qty = shares_bought  # Positive for buys
                     trades.append({"step": len(actions)-1, "type": "BUY", "price": price, "shares": shares_bought})
-                else:
-                    # Invalid buy action (insufficient cash)
-                    shares_needed = max(env.min_size, env.min_notional / price)
-                    notional = shares_needed * price
-                    fee = notional * env.trading_fee_rate
-                    cost_needed = notional + fee
-                    note = f"BUY invalid: need ${cost_needed:.2f}, have ${cash_before:.2f}"
             elif action == 2:  # Sell
+                action_name = "SELL"
                 if holdings_after < holdings_before:  # Trade executed (holdings decreased)
                     shares_sold = holdings_before - holdings_after
-                    notional = shares_sold * price
-                    fee = notional * env.trading_fee_rate
-                    proceeds = notional - fee
-                    avg_entry = env.avg_entry_price if env.holdings > 0 else 0.0
-                    note = f"Sold {shares_sold:.4f} @ ${price:.2f}, avg_entry=${avg_entry:.2f}"
+                    qty = -shares_sold  # Negative for sells
                     trades.append({"step": len(actions)-1, "type": "SELL", "price": price, "shares": shares_sold})
-                else:
-                    # Invalid sell action (no holdings)
-                    if holdings_before <= 0:
-                        note = f"SELL invalid: no holdings (have {holdings_before:.4f} shares)"
-                    else:
-                        # Shouldn't happen, but log it
-                        note = f"SELL invalid: insufficient holdings"
+            else:  # HOLD
+                action_name = "HOLD"
+            
+            # Get average entry price for AEP column (0.0 if no position)
+            avg_entry_price = env.avg_entry_price if env.holdings > 0 else 0.0
             
             log_file.write(
                 f"{len(actions)-1:<6} ${price:<9.2f} "
                 f"{price_move_pct:>+8.4f}% "
                 f"${price_move_dollar:>+9.2f} "
-                f"{action_name:<8} "
+                f"{action_name:<7} "
+                f"{flag:<7} "
+                f"{qty:>+10.4f} "
                 f"${cash_after:<11.2f} "
                 f"{position:<12.4f} "
-                f"{holdings_after:<12.4f} "
                 f"${portfolio_after:<11.2f} "
-                f"{note}\n"
+                f"${avg_entry_price:<9.2f}\n"
             )
     
     # Verify position is zero at the end
@@ -145,7 +148,7 @@ def run_strategy(env, model, log_file=None):
         if log_file:
             log_file.write(f"\nWARNING: Position not fully closed at end. Remaining position: {final_position:.6f} shares\n")
     
-    return actions, portfolio_values, trades
+    return actions, portfolio_values, trades, force_sell_index
 
 
 def calculate_metrics(portfolio_values, initial_capital):

@@ -28,6 +28,7 @@ trade_execution_reward = _common_settings.get("trade_execution_reward")
 momentum_reward_scale = _common_settings.get("momentum_reward_scale")
 train_split_ratio = _common_settings.get("train_split_ratio")
 default_model_file = _common_settings.get("default_model_file")
+pnl_penalty = _common_settings.get("pnl_penalty")
 
 # BTC-specific settings
 initial_capital = _btc_settings.get("initial_capital")
@@ -38,6 +39,7 @@ profit_threshold = _btc_settings.get("profit_threshold")
 partial_sell_ratio = _btc_settings.get("partial_sell_ratio")
 dca_threshold = _btc_settings.get("dca_threshold")
 dca_ratio = _btc_settings.get("dca_ratio")
+lot_size = _btc_settings.get("lot_size")
 
 # Helper function to get all settings
 def get_all_settings() -> Dict[str, Dict[str, Any]]:

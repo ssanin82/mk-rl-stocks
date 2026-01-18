@@ -6,26 +6,34 @@ import gymnasium as gym
 import numpy as np
 from mkrl.settings import (
     trade_execution_reward, momentum_reward_scale,
-    profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio
+    profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio,
+    lot_size, pnl_penalty
 )
 
 
 class TradingEnv(gym.Env):
-    def __init__(self, prices, initial_capital=1000, min_notional=5.0, min_size=0.1, trading_fee_rate=0.001):
+    def __init__(self, prices, initial_capital=1000, min_notional=5.0, min_size=0.1, trading_fee_rate=0.001, lot_size=None):
         super().__init__()
         self.prices = prices
         self.initial_capital = initial_capital
         self.min_notional = min_notional
         self.min_size = min_size
         self.trading_fee_rate = trading_fee_rate
+        self.lot_size = lot_size if lot_size is not None else 0.001  # Default to 0.001 if not provided
         self.current_step = 0
         self.cash = initial_capital
         self.holdings = 0
         self.avg_entry_price = 0.0  # Volume-weighted average entry price
         self.total_cost_basis = 0.0  # Total cost basis for calculating average entry price
         self.action_space = gym.spaces.Discrete(3)
-        # Observation: [price_norm, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell]
+        # Observation: [log_return, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell]
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32)
+    
+    def _round_to_lot_size(self, shares):
+        """Round trade quantity to the nearest lot_size increment."""
+        if self.lot_size <= 0:
+            return shares
+        return round(shares / self.lot_size) * self.lot_size
         
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -38,14 +46,22 @@ class TradingEnv(gym.Env):
     
     def _get_obs(self):
         price = self.prices[self.current_step]
-        # Add price history (last 5 prices) and price change indicators
+        
+        # Calculate log return (log(price_today / price_yesterday))
+        # This is a standard financial metric that normalizes price movements
+        if self.current_step >= 1 and self.prices[self.current_step - 1] > 0:
+            log_return = np.log(price / self.prices[self.current_step - 1])
+        else:
+            log_return = 0.0
+        
+        # Price change percentage (for backward compatibility and additional signal)
         if self.current_step >= 1:
             price_change = (price - self.prices[self.current_step - 1]) / self.prices[self.current_step - 1]
         else:
             price_change = 0.0
         
         # Add relative price (normalized by initial price)
-        relative_price = price / self.prices[0] if len(self.prices) > 0 else 1.0
+        relative_price = price / self.prices[0] if len(self.prices) > 0 and self.prices[0] > 0 else 1.0
         
         # Add cash and holdings as percentage of initial capital
         cash_ratio = self.cash / self.initial_capital
@@ -68,7 +84,7 @@ class TradingEnv(gym.Env):
         can_sell = 1.0 if self.holdings > 0 else 0.0
         
         return np.array([
-            price / 100.0,  # Normalize price (rough normalization)
+            log_return * 100,  # Log return (scaled by 100 for better learning signal)
             price_change * 100,  # Price change percentage
             relative_price,  # Relative price
             cash_ratio,  # Cash as ratio
@@ -96,6 +112,7 @@ class TradingEnv(gym.Env):
             # Check if we can afford a minimum trade
             shares_needed_for_notional = self.min_notional / price if price > 0 else 0
             trade_shares = max(self.min_size, shares_needed_for_notional)
+            trade_shares = self._round_to_lot_size(trade_shares)  # Round to lot size
             notional = trade_shares * price
             fee = notional * self.trading_fee_rate
             total_cost = notional + fee
@@ -125,9 +142,11 @@ class TradingEnv(gym.Env):
                 # Calculate trade size: at least min_size, and notional at least min_notional
                 shares_needed_for_notional = self.min_notional / price if price > 0 else 0
                 trade_shares = max(self.min_size, shares_needed_for_notional)
+                trade_shares = self._round_to_lot_size(trade_shares)  # Round to lot size
                 
                 # Don't sell more than we have
                 trade_shares = min(trade_shares, self.holdings)
+                trade_shares = self._round_to_lot_size(trade_shares)  # Round again after capping
                 
                 # Check if trade meets minimum notional (unless we're selling all remaining holdings)
                 notional = trade_shares * price
@@ -182,6 +201,8 @@ class TradingEnv(gym.Env):
                 # Ensure it meets minimum size and notional
                 shares_to_sell = max(shares_to_sell, self.min_size)
                 shares_to_sell = min(shares_to_sell, self.holdings)  # Don't sell more than we have
+                shares_to_sell = self._round_to_lot_size(shares_to_sell)  # Round to lot size
+                shares_to_sell = min(shares_to_sell, self.holdings)  # Cap again after rounding
                 
                 notional = shares_to_sell * price
                 if notional >= self.min_notional and shares_to_sell > 0:
@@ -213,6 +234,7 @@ class TradingEnv(gym.Env):
                 shares_to_add = target_add_value / price if price > 0 else 0
                 # Ensure it meets minimum size
                 shares_to_add = max(shares_to_add, self.min_size)
+                shares_to_add = self._round_to_lot_size(shares_to_add)  # Round to lot size
                 
                 notional = shares_to_add * price
                 fee = notional * self.trading_fee_rate
@@ -237,9 +259,14 @@ class TradingEnv(gym.Env):
         self.current_step += 1
         done = self.current_step >= len(self.prices) - 1
         
+        # Track if force-sell happened
+        force_sell_executed = False
+        force_sell_shares = 0.0
+        
         # Position constraint: must end with 0 position (all holdings sold)
         # Force sell everything at the end, ignoring minimum notional
         if done and self.holdings > 0:
+            force_sell_shares = self.holdings
             current_price = self.prices[min(self.current_step, len(self.prices) - 1)]
             notional = self.holdings * current_price
             fee = notional * self.trading_fee_rate
@@ -248,6 +275,7 @@ class TradingEnv(gym.Env):
             self.holdings = 0.0
             self.avg_entry_price = 0.0
             self.total_cost_basis = 0.0
+            force_sell_executed = True
         
         terminated = done
         truncated = False
@@ -300,6 +328,10 @@ class TradingEnv(gym.Env):
         if done:
             total_pnl_reward = portfolio_change / self.initial_capital * 100
             reward += total_pnl_reward
+            
+            # Penalty for 0 or negative P&L at the end (encourages profitability)
+            if portfolio_change <= 0:
+                reward += pnl_penalty
         
         # Penalty for having position near the end (encourage closing position before end)
         # Penalty increases as we approach the end
@@ -315,5 +347,11 @@ class TradingEnv(gym.Env):
         if position_mgmt_executed:
             info['position_mgmt_action'] = position_mgmt_action
             info['position_mgmt_triggered'] = True
+        if force_sell_executed:
+            # Use the price that was used for force-sell (before holdings were set to 0)
+            # This is the same price as used in the force-sell calculation
+            info['force_sell_executed'] = True
+            info['force_sell_shares'] = force_sell_shares
+            info['force_sell_price'] = self.prices[min(self.current_step, len(self.prices) - 1)]
         
         return self._get_obs(), reward, terminated, truncated, info
