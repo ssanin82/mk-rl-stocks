@@ -99,7 +99,7 @@ def main():
         log_file.write("=" * 90 + "\n")
         log_file.write("TRADING REPORT\n")
         log_file.write("=" * 90 + "\n\n")
-        actions, portfolio_values, trades, force_sell_index = run_strategy(env_test, model, log_file=log_file)
+        actions, portfolio_values, trades, force_sell_index, total_fees = run_strategy(env_test, model, log_file=log_file)
         
         # Calculate metrics
         metrics = calculate_metrics(portfolio_values, initial_capital)
@@ -112,6 +112,7 @@ def main():
         log_file.write(f"Final Capital:   ${metrics['final_capital']:.2f}\n")
         log_file.write(f"Total P&L:       ${metrics['total_pnl']:.2f}\n")
         log_file.write(f"Total Return:    {metrics['total_return']:.2f}%\n")
+        log_file.write(f"Total Fees:      ${total_fees:.2f}\n")
         log_file.write(f"Max Drawdown:    {metrics['max_drawdown']:.2f}%\n")
         log_file.write(f"Volatility:      {metrics['volatility']:.2f}%\n")
         

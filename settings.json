@@ -2,7 +2,7 @@
   "common": {
     "n_price_points": 20000,
     "default_prices_file": "btc_usdt_1m_prices.txt",
-    "training_episodes": 30,
+    "training_episodes": 200,
     "trade_execution_reward": 0.1,
     "momentum_reward_scale": 0.05,
     "train_split_ratio": 0.9,
