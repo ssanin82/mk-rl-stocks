@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+# Add parent directory to Python path if running as a script (not as a module)
+if __name__ == "__main__" and __file__:
+    project_root = Path(__file__).parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 import gymnasium as gym
 import numpy as np
 import plotly.graph_objects as go
