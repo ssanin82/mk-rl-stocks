@@ -3,6 +3,11 @@ import plotly.graph_objects as go
 
 
 def create_figure(prices, actions, portfolio_values, metrics):
+    # Ensure prices and actions are aligned - use minimum length
+    min_len = min(len(prices), len(actions))
+    prices = prices[:min_len]
+    actions = actions[:min_len]
+    
     # Find buy and sell points
     buy_indices = [i for i, a in enumerate(actions) if a == 1]
     sell_indices = [i for i, a in enumerate(actions) if a == 2]
@@ -20,7 +25,7 @@ def create_figure(prices, actions, portfolio_values, metrics):
         row_heights=[0.4, 0.4, 0.2]
     )
     
-    # Price chart
+    # Price chart - only plot up to actions length
     fig.add_trace(
         go.Scatter(x=list(range(len(prices))), y=prices, name="Stock Price",
                   line=dict(color='#2196F3', width=2), fill='tozeroy',
@@ -28,21 +33,23 @@ def create_figure(prices, actions, portfolio_values, metrics):
         row=1, col=1
     )
     
-    # Buy signals
-    fig.add_trace(
-        go.Scatter(x=buy_indices, y=[prices[i] for i in buy_indices],
-                  mode='markers', name='Buy Signal',
-                  marker=dict(color='#4CAF50', size=12, symbol='triangle-up')),
-        row=1, col=1
-    )
+    # Buy signals - only show if there are any
+    if buy_indices:
+        fig.add_trace(
+            go.Scatter(x=buy_indices, y=[prices[i] for i in buy_indices],
+                      mode='markers', name='Buy Signal',
+                      marker=dict(color='#4CAF50', size=12, symbol='triangle-up')),
+            row=1, col=1
+        )
     
-    # Sell signals
-    fig.add_trace(
-        go.Scatter(x=sell_indices, y=[prices[i] for i in sell_indices],
-                  mode='markers', name='Sell Signal',
-                  marker=dict(color='#f44336', size=12, symbol='triangle-down')),
-        row=1, col=1
-    )
+    # Sell signals - only show if there are any
+    if sell_indices:
+        fig.add_trace(
+            go.Scatter(x=sell_indices, y=[prices[i] for i in sell_indices],
+                      mode='markers', name='Sell Signal',
+                      marker=dict(color='#f44336', size=12, symbol='triangle-down')),
+            row=1, col=1
+        )
     
     # Portfolio value chart
     fig.add_trace(
