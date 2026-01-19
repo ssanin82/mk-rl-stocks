@@ -1036,7 +1036,6 @@ class TradingEnv(gym.Env):
             steps_remaining_ratio=steps_remaining_ratio,
             current_price=current_price,
             invalid_sell_attempted=invalid_sell_attempted,
-            invalid_sell_attempted_flag=1.0 if invalid_sell_attempted else 0.0,  # Add to info for logging
             was_first_trade=was_first_trade
         )
         

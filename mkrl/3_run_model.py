@@ -9,6 +9,7 @@ import numpy as np
 import time
 import argparse
 import webbrowser
+import re
 
 # Add parent directory to Python path if running as a script
 if __name__ == "__main__":
@@ -20,34 +21,254 @@ from stable_baselines3 import PPO
 from mkrl.env import TradingEnv
 from mkrl.utils import calculate_metrics
 from mkrl.web import create_static_html
-from mkrl.settings import (
-    initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
-    default_prices_file, default_model_file, train_split_ratio,
-    curriculum_forced_buy_delay, curriculum_forced_buy_size
-)
+import mkrl.settings as settings_module
+
+
+def load_prices(prices_file):
+    """Load prices from file (one price per line)."""
+    prices_path = Path(prices_file)
+    if not prices_path.exists():
+        raise FileNotFoundError(f"Prices file not found: {prices_path}")
+    
+    prices = []
+    with open(prices_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    prices.append(float(line))
+                except ValueError:
+                    continue
+    
+    if len(prices) == 0:
+        raise ValueError(f"No valid prices found in {prices_path}")
+    
+    return np.array(prices)
+
+
+def extract_config_name_from_model(model_path: str) -> str:
+    """
+    Extract config name from model filename.
+    E.g., 'model_base.zip' -> 'base', 'model_half_aggressive.zip' -> 'half_aggressive'
+    """
+    model_file = Path(model_path).name
+    # Remove .zip extension
+    model_base = model_file.replace('.zip', '')
+    # Remove 'model_' prefix
+    if model_base.startswith('model_'):
+        config_name = model_base[6:]  # len('model_') = 6
+    else:
+        # Fallback: try to extract from any pattern
+        match = re.match(r'model_(.+)', model_base)
+        if match:
+            config_name = match.group(1)
+        else:
+            config_name = "base"  # Default
+    return config_name
+
+
+def find_settings_file_for_config(config_name: str) -> str:
+    """
+    Find the settings file for a given config name.
+    Returns the settings file path.
+    """
+    if config_name == "base":
+        return "settings.json"
+    else:
+        # Try settings_<config_name>.json
+        settings_file = f"settings_{config_name}.json"
+        settings_path = Path(settings_file)
+        if settings_path.exists():
+            return str(settings_path)
+        else:
+            # Fallback to base settings
+            print(f"  ⚠ Warning: Settings file {settings_file} not found, using settings.json")
+            return "settings.json"
+
+
+def run_model_for_config(model_file: str, prices_file: str, split: float):
+    """
+    Run a single model and generate report.
+    
+    Args:
+        model_file: Path to model zip file
+        prices_file: Path to prices file
+        split: Train/test split ratio
+    
+    Returns:
+        Tuple of (config_name, html_path, log_path)
+    """
+    # Extract config name from model filename
+    config_name = extract_config_name_from_model(model_file)
+    
+    print(f"\n{'='*70}")
+    print(f"Running model: {config_name}")
+    print(f"Model file: {model_file}")
+    print(f"{'='*70}")
+    
+    # Load settings for this config
+    settings_file = find_settings_file_for_config(config_name)
+    print(f"Loading settings from {settings_file}...")
+    settings_module.load_settings(settings_file)
+    
+    # Import settings after reload
+    from mkrl.settings import (
+        initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
+        default_prices_file, train_split_ratio,
+        curriculum_forced_buy_delay, curriculum_forced_buy_size
+    )
+    
+    # Load prices
+    print(f"Loading prices from {prices_file}...")
+    all_prices = load_prices(prices_file)
+    print(f"  Loaded {len(all_prices)} price points")
+    
+    # Split into test set (last 10%)
+    split_idx = int(len(all_prices) * split)
+    test_prices = all_prices[split_idx:]
+    print(f"  Using last {len(test_prices)} prices ({(1-split)*100:.0f}%) for testing")
+    
+    # Load model
+    model_path = Path(model_file)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    print(f"\nLoading model from {model_path}...")
+    model = PPO.load(str(model_path))
+    print("✓ Model loaded successfully")
+    
+    # Create test environment
+    print("\nCreating test environment...")
+    env_test = TradingEnv(
+        test_prices,
+        initial_capital=initial_capital,
+        min_notional=min_notional,
+        min_size=min_size,
+        trading_fee_rate=trading_fee_rate,
+        lot_size=lot_size
+    )
+    
+    # Run strategy
+    print("\nRunning strategy on test data...")
+    ts = time.time()
+    
+    log_filename = f'trading_report_{config_name}.log'
+    with open(log_filename, 'w', encoding='utf-8') as log_file:
+        log_file.write("=" * 90 + "\n")
+        log_file.write(f"TRADING REPORT - Config: {config_name}\n")
+        log_file.write("=" * 90 + "\n\n")
+        actions, portfolio_values, trades, force_sell_index, total_fees = run_strategy(
+            env=env_test,
+            model=model,
+            log_file=log_file,
+            force_initial_buys=True,  # Enable forced buys during evaluation
+            forced_buy_delay=curriculum_forced_buy_delay,
+            forced_buy_size=curriculum_forced_buy_size
+        )
+        
+        # Calculate metrics
+        metrics = calculate_metrics(portfolio_values, initial_capital)
+        
+        # Performance metrics
+        log_file.write("\n" + "=" * 90 + "\n")
+        log_file.write("PERFORMANCE METRICS\n")
+        log_file.write("=" * 90 + "\n")
+        log_file.write(f"Initial Capital: ${metrics['initial_capital']:.2f}\n")
+        log_file.write(f"Final Capital:   ${metrics['final_capital']:.2f}\n")
+        log_file.write(f"Total P&L:       ${metrics['total_pnl']:.2f}\n")
+        log_file.write(f"Total Return:    {metrics['total_return']:.2f}%\n")
+        log_file.write(f"Total Fees:      ${total_fees:.2f}\n")
+        log_file.write(f"Max Drawdown:    {metrics['max_drawdown']:.2f}%\n")
+        log_file.write(f"Volatility:      {metrics['volatility']:.2f}%\n")
+        
+        # Summary statistics
+        log_file.write("\n" + "=" * 90 + "\n")
+        log_file.write("ACTION SUMMARY\n")
+        log_file.write("=" * 90 + "\n")
+        action_counts = {0: 0, 1: 0, 2: 0}
+        for action in actions:
+            action_counts[action] += 1
+        log_file.write(f"HOLD actions: {action_counts[0]} ({action_counts[0]/len(actions)*100:.1f}%)\n")
+        log_file.write(f"BUY actions:  {action_counts[1]} ({action_counts[1]/len(actions)*100:.1f}%)\n")
+        log_file.write(f"SELL actions: {action_counts[2]} ({action_counts[2]/len(actions)*100:.1f}%)\n")
+        
+        log_file.write(f"\nTotal trades executed: {len(trades)}\n")
+        if trades:
+            log_file.write("\nTrade Details:\n")
+            log_file.write("-" * 90 + "\n")
+            for trade in trades:
+                log_file.write(f"Step {trade['step']:>5}: {trade['type']:<4} {trade['shares']:.4f} shares @ ${trade['price']:.2f}\n")
+    
+    execution_time = time.time() - ts
+    print(f"✓ Execution complete! Took {round(execution_time, 3)} seconds")
+    
+    # Calculate metrics (for console output)
+    metrics = calculate_metrics(portfolio_values, initial_capital)
+    
+    print(f"\nResults for {config_name}:")
+    print(f"Initial Capital: ${metrics['initial_capital']:.2f}")
+    print(f"Final Capital: ${metrics['final_capital']:.2f}")
+    print(f"Total P&L: ${metrics['total_pnl']:.2f}")
+    print(f"Total Return: {metrics['total_return']:.2f}%")
+    
+    # Print action statistics
+    action_counts = {0: 0, 1: 0, 2: 0}
+    for action in actions:
+        action_counts[action] += 1
+    print(f"\nAction Distribution:")
+    print(f"  HOLD: {action_counts[0]} ({action_counts[0]/len(actions)*100:.1f}%)")
+    print(f"  BUY:  {action_counts[1]} ({action_counts[1]/len(actions)*100:.1f}%)")
+    print(f"  SELL: {action_counts[2]} ({action_counts[2]/len(actions)*100:.1f}%)")
+    print(f"Total trades executed: {len(trades)}")
+    print(f"\nTrading report saved to: {log_filename}")
+    
+    # Create static HTML file (with config name in filename)
+    print("\nGenerating static HTML report...")
+    html_file = create_static_html(test_prices, actions, portfolio_values, metrics, force_sell_index=force_sell_index)
+    # Rename HTML file to include config name
+    html_path_old = Path(html_file)
+    html_path_new = html_path_old.parent / f"trading_results_{config_name}.html"
+    if html_path_old.exists():
+        html_path_old.rename(html_path_new)
+        html_path = html_path_new.resolve()
+    else:
+        html_path = Path(html_file).resolve()
+    
+    print(f"HTML report saved to: {html_path}")
+    print("Opening in browser...")
+    
+    # Open in external browser
+    webbrowser.open(html_path.as_uri())
+    
+    return config_name, html_path, Path(log_filename)
 
 
 def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_delay=10, forced_buy_size=0.001):
-    """Run the trained model on the environment and log all actions.
+    """
+    Run the trading strategy using the trained model.
     
     Args:
         env: Trading environment
-        model: Trained RL model
-        log_file: Optional file path for logging
-        force_initial_buys: If True, force initial buys during first N steps if no trade occurred
-        forced_buy_delay: Steps to wait before forcing a buy
+        model: Trained PPO model
+        log_file: Optional file handle to write trading log
+        force_initial_buys: Whether to force initial buys if no trade occurred
+        forced_buy_delay: Steps before forcing a buy
         forced_buy_size: Size of forced buy
+    
+    Returns:
+        Tuple of (actions, portfolio_values, trades, force_sell_index, total_fees)
     """
-    obs, info = env.reset()
+    obs = env.reset()
+    done = False
     actions = []
     portfolio_values = []
-    trades = []  # Store trade details
-    prev_price = None  # Track previous price for price move calculations
-    prev_norm_price = None  # Track previous normalized price for normalized move calculations
-    force_sell_index = None  # Track the last force-sell step
+    trades = []
+    total_fees = 0.0
+    force_sell_index = None
     
-    total_fees = 0.0  # Track total trading fees paid
-    step_count = 0  # Track steps for forced buys
+    prev_price = None
+    prev_norm_price = None
+    step_count = 0
     
     # Get normalization method abbreviation (max 8 characters)
     norm_method = env.normalization_method
@@ -78,12 +299,17 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
     done = False
     forced_buy_executed = False  # Track if forced buy was executed this step
     while not done:
+        # Record state BEFORE any action (including forced buy)
+        price = env.prices[env.current_step]
+        norm_price = env.normalized_prices[env.current_step]  # Get normalized price
+        cash_before = env.cash
+        holdings_before = env.holdings  # Record BEFORE forced buy (if any)
+        
         # FORCED BUY LOGIC: Force initial buys during first N steps if no trade occurred
         forced_buy_executed = False  # Reset each iteration
         if force_initial_buys and step_count > 0 and step_count % forced_buy_delay == 0:
             if not env.has_ever_traded and env.holdings == 0:
                 # Force a buy action
-                price = env.prices[env.current_step]
                 shares = max(forced_buy_size, env.min_size)
                 shares = env._round_to_lot_size(shares)
                 notional = shares * price
@@ -100,9 +326,7 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                 total_cost = notional + fee
                 
                 if env.cash >= total_cost:
-                    # FIXED: Record holdings BEFORE forced buy to calculate qty correctly
-                    holdings_before_forced = env.holdings
-                    # Execute forced buy
+                    # Execute forced buy (holdings_before already recorded above)
                     env.holdings += shares
                     env.cash -= total_cost
                     env.cash = max(0, env.cash)
@@ -115,7 +339,7 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                             env.normalized_entry_price = current_norm_price
                         else:
                             # Volume-weighted average
-                            old_shares = holdings_before_forced
+                            old_shares = holdings_before
                             if old_shares > 0:
                                 env.normalized_entry_price = (
                                     (env.normalized_entry_price * old_shares) + 
@@ -127,9 +351,9 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                     env.last_trade_step = env.current_step
                     env.steps_since_last_trade = 0
                     env.steps_without_trade = 0  # Reset accumulating penalty
-                    # Set action to HOLD to avoid double-buy in env.step()
-                    action = 0  # FIXED: Use HOLD to prevent double execution
-                    original_action = 0  # Track that this was a forced buy (not model action)
+                    # FIXED: Set action to HOLD to prevent double execution in env.step()
+                    action = 0  # HOLD - forced buy already executed, don't execute again
+                    original_action = 0  # Track that this was a forced buy
                     forced_buy_executed = True  # Mark that forced buy happened
                 else:
                     # Can't afford forced buy, proceed with model prediction
@@ -167,12 +391,6 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
             actions.append(0)  # Store as HOLD
         else:
             actions.append(action)
-        
-        # Record state before action (BEFORE forced buy execution)
-        price = env.prices[env.current_step]
-        norm_price = env.normalized_prices[env.current_step]  # Get normalized price
-        cash_before = env.cash
-        holdings_before = env.holdings  # FIXED: This is now BEFORE forced buy (if any)
         avg_entry_before = env.avg_entry_price if env.avg_entry_price > 0 else 0.0  # Get entry price before step
         
         # Calculate normalized price move
@@ -221,7 +439,7 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
         if force_sell_executed:
             qty_this_step = -force_sell_shares  # Negative for sells
             notional = force_sell_shares * force_sell_price
-            fee_this_step = notional * trading_fee_rate
+            fee_this_step = notional * env.trading_fee_rate
             total_fees += fee_this_step
         # Check if position management rules executed a trade
         elif position_mgmt_triggered and position_mgmt_action:
@@ -230,14 +448,14 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                 if shares_sold > 0:
                     qty_this_step = -shares_sold  # Negative for sells
                     notional = shares_sold * price
-                    fee_this_step = notional * trading_fee_rate
+                    fee_this_step = notional * env.trading_fee_rate
                     total_fees += fee_this_step
             elif "DCA" in position_mgmt_action or "BUY" in position_mgmt_action:
                 shares_bought_auto = holdings_after - holdings_before
                 if shares_bought_auto > 0:
                     qty_this_step = shares_bought_auto  # Positive for buys
                     notional = shares_bought_auto * price
-                    fee_this_step = notional * trading_fee_rate
+                    fee_this_step = notional * env.trading_fee_rate
                     total_fees += fee_this_step
         # Model actions
         elif action == 1 and cash_after < cash_before:  # BUY executed
@@ -245,14 +463,14 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
             if shares_bought > 0:
                 qty_this_step = shares_bought  # Positive for buys
                 notional = shares_bought * price
-                fee_this_step = notional * trading_fee_rate
+                fee_this_step = notional * env.trading_fee_rate
                 total_fees += fee_this_step
         elif action == 2 and holdings_after < holdings_before:  # SELL executed
             shares_sold = holdings_before - holdings_after
             if shares_sold > 0:
                 qty_this_step = -shares_sold  # Negative for sells
                 notional = shares_sold * price
-                fee_this_step = notional * trading_fee_rate
+                fee_this_step = notional * env.trading_fee_rate
                 total_fees += fee_this_step
         
         # Log action details
@@ -272,9 +490,9 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                 qty = forced_buy_shares  # Positive for buys
                 if forced_buy_shares > 0:
                     notional = forced_buy_shares * price
-                    fee = notional * trading_fee_rate
+                    fee = notional * env.trading_fee_rate
                     total_fees += fee  # Add to total fees
-                note = "Forced buy - initial entry"
+                note = f"Forced buy - initial entry ({forced_buy_shares:.4f} shares)"
                 trades.append({"step": len(actions)-1, "type": "BUY (FORCE)", "price": price, "shares": forced_buy_shares})
             # Check if force-sell executed (highest priority for logging)
             elif force_sell_executed:
@@ -463,154 +681,65 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
     return actions, portfolio_values, trades, force_sell_index, total_fees
 
 
-def load_prices(prices_file):
-    """Load prices from file (one price per line)."""
-    prices_path = Path(prices_file)
-    if not prices_path.exists():
-        raise FileNotFoundError(f"Prices file not found: {prices_path}")
-    
-    prices = []
-    with open(prices_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    prices.append(float(line))
-                except ValueError:
-                    continue
-    
-    if len(prices) == 0:
-        raise ValueError(f"No valid prices found in {prices_path}")
-    
-    return np.array(prices)
-
-
 def main():
-    """Run the model on last 10% of prices."""
-    parser = argparse.ArgumentParser(description='Run trained RL trading model')
-    parser.add_argument('--prices', '-p', type=str, default=default_prices_file,
-                        help=f'Input prices file (default: {default_prices_file})')
-    parser.add_argument('--model', '-m', type=str, default=default_model_file,
-                        help=f'Input model file (default: {default_model_file})')
-    parser.add_argument('--split', type=float, default=train_split_ratio,
-                        help=f'Training split ratio - test uses remaining (default: {train_split_ratio})')
+    """Run the model(s) on last 10% of prices."""
+    parser = argparse.ArgumentParser(description='Run trained RL trading model(s)')
+    parser.add_argument('--prices', '-p', type=str, default=None,
+                        help='Input prices file (default: from settings.json)')
+    parser.add_argument('--split', type=float, default=None,
+                        help='Training split ratio - test uses remaining (default: from settings.json)')
+    parser.add_argument('model_files', nargs='*',
+                        help='Model zip file(s) to run (default: model_base.zip)')
     
     args = parser.parse_args()
     
-    # Load prices
-    print(f"Loading prices from {args.prices}...")
-    all_prices = load_prices(args.prices)
-    print(f"  Loaded {len(all_prices)} price points")
+    # Determine model files to use
+    if args.model_files:
+        model_files = args.model_files
+    else:
+        # Default to model_base.zip
+        model_files = ["model_base.zip"]
     
-    # Split into test set (last 10%)
-    split_idx = int(len(all_prices) * args.split)
-    test_prices = all_prices[split_idx:]
-    print(f"  Using last {len(test_prices)} prices ({(1-args.split)*100:.0f}%) for testing")
+    print(f"\n{'='*70}")
+    print(f"RUNNING {len(model_files)} MODEL(S)")
+    print(f"{'='*70}")
+    print(f"Model files: {', '.join(model_files)}")
     
-    # Load model
-    model_path = Path(args.model)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}")
+    # Load default settings to get default values for prices, split
+    settings_module.load_settings("settings.json")
+    from mkrl.settings import default_prices_file, train_split_ratio
     
-    print(f"\nLoading model from {model_path}...")
-    model = PPO.load(str(model_path))
-    print("✓ Model loaded successfully")
+    prices_file = args.prices or default_prices_file
+    split = args.split if args.split is not None else train_split_ratio
     
-    # Create test environment
-    print("\nCreating test environment...")
-    env_test = TradingEnv(
-        test_prices,
-        initial_capital=initial_capital,
-        min_notional=min_notional,
-        min_size=min_size,
-        trading_fee_rate=trading_fee_rate,
-        lot_size=lot_size
-    )
+    # Run each model
+    results = []
+    for i, model_file in enumerate(model_files, 1):
+        print(f"\n{'#'*70}")
+        print(f"# Running model {i}/{len(model_files)}")
+        print(f"{'#'*70}")
+        try:
+            config_name, html_path, log_path = run_model_for_config(
+                model_file=model_file,
+                prices_file=prices_file,
+                split=split
+            )
+            results.append((config_name, html_path, log_path))
+        except Exception as e:
+            print(f"\n✗ ERROR running model {model_file}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            continue
     
-    # Run strategy
-    print("\nRunning strategy on test data...")
-    ts = time.time()
-    
-    log_filename = 'trading_report.log'
-    with open(log_filename, 'w', encoding='utf-8') as log_file:
-        log_file.write("=" * 90 + "\n")
-        log_file.write("TRADING REPORT\n")
-        log_file.write("=" * 90 + "\n\n")
-        actions, portfolio_values, trades, force_sell_index, total_fees = run_strategy(
-            env=env_test,
-            model=model,
-            log_file=log_file,
-            force_initial_buys=True,  # Enable forced buys during evaluation
-            forced_buy_delay=curriculum_forced_buy_delay,
-            forced_buy_size=curriculum_forced_buy_size
-        )
-        
-        # Calculate metrics
-        metrics = calculate_metrics(portfolio_values, initial_capital)
-        
-        # Performance metrics
-        log_file.write("\n" + "=" * 90 + "\n")
-        log_file.write("PERFORMANCE METRICS\n")
-        log_file.write("=" * 90 + "\n")
-        log_file.write(f"Initial Capital: ${metrics['initial_capital']:.2f}\n")
-        log_file.write(f"Final Capital:   ${metrics['final_capital']:.2f}\n")
-        log_file.write(f"Total P&L:       ${metrics['total_pnl']:.2f}\n")
-        log_file.write(f"Total Return:    {metrics['total_return']:.2f}%\n")
-        log_file.write(f"Total Fees:      ${total_fees:.2f}\n")
-        log_file.write(f"Max Drawdown:    {metrics['max_drawdown']:.2f}%\n")
-        log_file.write(f"Volatility:      {metrics['volatility']:.2f}%\n")
-        
-        # Summary statistics
-        log_file.write("\n" + "=" * 90 + "\n")
-        log_file.write("ACTION SUMMARY\n")
-        log_file.write("=" * 90 + "\n")
-        action_counts = {0: 0, 1: 0, 2: 0}
-        for action in actions:
-            action_counts[action] += 1
-        log_file.write(f"HOLD actions: {action_counts[0]} ({action_counts[0]/len(actions)*100:.1f}%)\n")
-        log_file.write(f"BUY actions:  {action_counts[1]} ({action_counts[1]/len(actions)*100:.1f}%)\n")
-        log_file.write(f"SELL actions: {action_counts[2]} ({action_counts[2]/len(actions)*100:.1f}%)\n")
-        
-        log_file.write(f"\nTotal trades executed: {len(trades)}\n")
-        if trades:
-            log_file.write("\nTrade Details:\n")
-            log_file.write("-" * 90 + "\n")
-            for trade in trades:
-                log_file.write(f"Step {trade['step']:>5}: {trade['type']:<4} {trade['shares']:.4f} shares @ ${trade['price']:.2f}\n")
-    
-    execution_time = time.time() - ts
-    print(f"✓ Execution complete! Took {round(execution_time, 3)} seconds")
-    
-    # Calculate metrics (for console output)
-    metrics = calculate_metrics(portfolio_values, initial_capital)
-    
-    print(f"\nResults:")
-    print(f"Initial Capital: ${metrics['initial_capital']:.2f}")
-    print(f"Final Capital: ${metrics['final_capital']:.2f}")
-    print(f"Total P&L: ${metrics['total_pnl']:.2f}")
-    print(f"Total Return: {metrics['total_return']:.2f}%")
-    
-    # Print action statistics
-    action_counts = {0: 0, 1: 0, 2: 0}
-    for action in actions:
-        action_counts[action] += 1
-    print(f"\nAction Distribution:")
-    print(f"  HOLD: {action_counts[0]} ({action_counts[0]/len(actions)*100:.1f}%)")
-    print(f"  BUY:  {action_counts[1]} ({action_counts[1]/len(actions)*100:.1f}%)")
-    print(f"  SELL: {action_counts[2]} ({action_counts[2]/len(actions)*100:.1f}%)")
-    print(f"Total trades executed: {len(trades)}")
-    print(f"\nTrading report saved to: {log_filename}")
-    
-    # Create static HTML file
-    print("\nGenerating static HTML report...")
-    html_file = create_static_html(test_prices, actions, portfolio_values, metrics, force_sell_index=force_sell_index)
-    html_path = Path(html_file).resolve()
-    
-    print(f"HTML report saved to: {html_path}")
-    print("Opening in browser...")
-    
-    # Open in external browser
-    webbrowser.open(html_path.as_uri())
+    # Summary
+    print(f"\n{'='*70}")
+    print("EXECUTION SUMMARY")
+    print(f"{'='*70}")
+    for config_name, html_path, log_path in results:
+        print(f"  {config_name}:")
+        print(f"    Report: {log_path}")
+        print(f"    HTML:   {html_path}")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":

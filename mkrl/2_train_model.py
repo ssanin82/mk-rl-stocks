@@ -22,14 +22,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from mkrl.env import TradingEnv
 import torch
 from mkrl.utils import format_time, normalize_prices, NormalizationMethod
-from mkrl.settings import (
-    initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
-    training_episodes, default_prices_file, default_model_file, train_split_ratio,
-    use_lstm_policy, normalization_method, ent_coef,
-    curriculum_enabled, curriculum_phase1_episodes, curriculum_forced_buy_delay,
-    curriculum_forced_buy_size, n_envs, use_vecenv, device_setting,
-    optimize_batch_size, optimize_network_size
-)
+import mkrl.settings as settings_module
 
 
 def create_training_complete_html(training_time, model_path, train_prices_count, episodes, training_timesteps):
@@ -191,28 +184,41 @@ class TrainingProgressCallback(BaseCallback):
         return True
 
 
-def main():
-    """Train the model on first 90% of prices."""
-    parser = argparse.ArgumentParser(description='Train RL trading model')
-    parser.add_argument('--prices', '-p', type=str, default=default_prices_file,
-                        help=f'Input prices file (default: {default_prices_file})')
-    parser.add_argument('--model', '-m', type=str, default=default_model_file,
-                        help=f'Output model file (default: {default_model_file})')
-    parser.add_argument('--episodes', '-e', type=int, default=training_episodes,
-                        help=f'Number of training episodes (default: {training_episodes})')
-    parser.add_argument('--split', type=float, default=train_split_ratio,
-                        help=f'Training split ratio (default: {train_split_ratio})')
+def train_model_for_config(settings_file: str, prices_file: str, split: float, episodes: int):
+    """
+    Train a single model for a given settings file.
     
-    args = parser.parse_args()
+    Args:
+        settings_file: Path to settings JSON file
+        prices_file: Path to prices file
+        split: Train/test split ratio
+        episodes: Number of training episodes
+    
+    Returns:
+        Tuple of (config_name, model_path, training_time)
+    """
+    # Reload settings from the specified file
+    settings_module.load_settings(settings_file)
+    
+    # Import settings after reload
+    from mkrl.settings import (
+        initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
+        training_episodes, default_prices_file, train_split_ratio,
+        use_lstm_policy, normalization_method, ent_coef,
+        curriculum_enabled, curriculum_phase1_episodes, curriculum_forced_buy_delay,
+        curriculum_forced_buy_size, n_envs, use_vecenv, device_setting,
+        optimize_batch_size, optimize_network_size, get_config_name
+    )
+    
+    config_name = get_config_name()
     
     # Load prices
-    print(f"Loading prices from {args.prices}...")
-    print("\n" + "="*70)
-    print("IMPORTANT: This model uses AGGRESSIVE reward shaping for trading!")
-    print("The model will be penalized heavily for NOT trading.")
-    print("Make sure settings.json has the latest reward parameters.")
-    print("="*70 + "\n")
-    all_prices = load_prices(args.prices)
+    print(f"\n{'='*70}")
+    print(f"Training model: {config_name}")
+    print(f"Settings file: {settings_file}")
+    print(f"{'='*70}")
+    print(f"Loading prices from {prices_file}...")
+    all_prices = load_prices(prices_file)
     print(f"  Loaded {len(all_prices)} price points")
     
     # Validate normalization method
@@ -226,14 +232,14 @@ def main():
     print(f"  Using normalization method: {norm_method.value}")
     
     # Split into training set (use actual prices for trading, normalization happens in observation space)
-    split_idx = int(len(all_prices) * args.split)
+    split_idx = int(len(all_prices) * split)
     train_prices = all_prices[:split_idx]
-    print(f"  Using first {len(train_prices)} prices ({args.split*100:.0f}%) for training")
+    print(f"  Using first {len(train_prices)} prices ({split*100:.0f}%) for training")
     
     # Calculate training timesteps: one episode = one pass through all training prices
     # So total timesteps = number of training prices * number of episodes
-    training_timesteps = len(train_prices) * args.episodes
-    print(f"  Training for {args.episodes} episodes = {training_timesteps} timesteps")
+    training_timesteps = len(train_prices) * episodes
+    print(f"  Training for {episodes} episodes = {training_timesteps} timesteps")
     
     # GPU Detection and Status
     print("\n" + "="*70)
@@ -304,18 +310,19 @@ def main():
         )
     
     # Create and train model
-    print(f"\nTraining PPO model for {training_timesteps} timesteps ({args.episodes} episodes)...")
+    print(f"\nTraining PPO model for {training_timesteps} timesteps ({episodes} episodes)...")
     print("(This may take several minutes...)\n")
     ts = time.time()
     
-    # Create log file for training progress
-    log_file_path = Path("training_progress.log")
+    # Create log file for training progress (with config name)
+    log_file_path = Path(f"training_progress_{config_name}.log")
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
-        log_file.write(f"Training Progress Log\n")
+        log_file.write(f"Training Progress Log - Config: {config_name}\n")
         log_file.write(f"{'='*80}\n")
         log_file.write(f"Total timesteps: {training_timesteps:,}\n")
-        log_file.write(f"Episodes: {args.episodes}\n")
+        log_file.write(f"Episodes: {episodes}\n")
         log_file.write(f"Training prices: {len(train_prices)}\n")
+        log_file.write(f"Settings file: {settings_file}\n")
         log_file.write(f"{'='*80}\n\n")
         
         # Create progress callback
@@ -329,7 +336,7 @@ def main():
         try:
             import tensorboard
             tensorboard_available = True
-            tensorboard_log_dir = "./tensorboard_logs/"
+            tensorboard_log_dir = Path(f"./tensorboard_logs_{config_name}/")
         except ImportError:
             tensorboard_available = False
             tensorboard_log_dir = None
@@ -410,7 +417,7 @@ def main():
         }
         
         if tensorboard_available:
-            model_kwargs["tensorboard_log"] = tensorboard_log_dir
+            model_kwargs["tensorboard_log"] = str(tensorboard_log_dir)
         
         print(f"\n  Device: {final_device}")
         print(f"  Policy: {policy_name}")
@@ -521,14 +528,15 @@ def main():
     
     print(f"✓ Training progress logged to {log_file_path.absolute()}")
     if tensorboard_available:
-        print(f"✓ TensorBoard logs saved to ./tensorboard_logs/")
-        print(f"  Run 'tensorboard --logdir ./tensorboard_logs' to view visual progress")
+        tensorboard_log_path = Path(f"./tensorboard_logs_{config_name}/")
+        print(f"✓ TensorBoard logs saved to {tensorboard_log_path}")
+        print(f"  Run 'tensorboard --logdir {tensorboard_log_path}' to view visual progress")
     
     training_time = time.time() - ts
-    print(f"\n✓ Training complete! Took {format_time(training_time)}")
+    print(f"\n✓ Training complete for {config_name}! Took {format_time(training_time)}")
     
-    # Save model
-    model_path = Path(args.model)
+    # Save model with config name
+    model_path = Path(f"model_{config_name}.zip")
     model.save(str(model_path))
     print(f"✓ Model saved to {model_path.absolute()}")
     
@@ -537,11 +545,76 @@ def main():
         training_time=training_time,
         model_path=model_path,
         train_prices_count=len(train_prices),
-        episodes=args.episodes,
+        episodes=episodes,
         training_timesteps=training_timesteps
     )
     print(f"\nOpening completion page in browser...")
     webbrowser.open(html_path.as_uri())
+    
+    return config_name, model_path, training_time
+
+
+def main():
+    """Train the model(s) on first 90% of prices."""
+    parser = argparse.ArgumentParser(description='Train RL trading model(s)')
+    parser.add_argument('--prices', '-p', type=str, default=None,
+                        help='Input prices file (default: from settings.json)')
+    parser.add_argument('--episodes', '-e', type=int, default=None,
+                        help='Number of training episodes (default: from settings.json)')
+    parser.add_argument('--split', type=float, default=None,
+                        help='Training split ratio (default: from settings.json)')
+    parser.add_argument('settings_files', nargs='*', 
+                        help='Settings JSON file(s) to use (default: settings.json)')
+    
+    args = parser.parse_args()
+    
+    # Determine settings files to use
+    if args.settings_files:
+        settings_files = args.settings_files
+    else:
+        # Default to settings.json
+        settings_files = ["settings.json"]
+    
+    print(f"\n{'='*70}")
+    print(f"TRAINING {len(settings_files)} MODEL(S)")
+    print(f"{'='*70}")
+    print(f"Settings files: {', '.join(settings_files)}")
+    
+    # Load default settings to get default values for prices, episodes, split
+    settings_module.load_settings(settings_files[0])
+    from mkrl.settings import default_prices_file, training_episodes, train_split_ratio
+    
+    prices_file = args.prices or default_prices_file
+    episodes = args.episodes or training_episodes
+    split = args.split if args.split is not None else train_split_ratio
+    
+    # Train models for each settings file
+    results = []
+    for i, settings_file in enumerate(settings_files, 1):
+        print(f"\n{'#'*70}")
+        print(f"# Training model {i}/{len(settings_files)}")
+        print(f"{'#'*70}")
+        try:
+            config_name, model_path, training_time = train_model_for_config(
+                settings_file=settings_file,
+                prices_file=prices_file,
+                split=split,
+                episodes=episodes
+            )
+            results.append((config_name, model_path, training_time))
+        except Exception as e:
+            print(f"\n✗ ERROR training model with {settings_file}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # Summary
+    print(f"\n{'='*70}")
+    print("TRAINING SUMMARY")
+    print(f"{'='*70}")
+    for config_name, model_path, training_time in results:
+        print(f"  {config_name}: {model_path} ({format_time(training_time)})")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
