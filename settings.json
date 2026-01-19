@@ -3,13 +3,23 @@
     "n_price_points": 100000,
     "default_prices_file": "btc_usdt_1m_prices.txt",
     "training_episodes": 30,
-    "trade_execution_reward": 0.1,
-    "momentum_reward_scale": 0.05,
     "train_split_ratio": 0.9,
     "default_model_file": "trading_model.zip",
-    "pnl_penalty": -10.0,
     "price_history_window": 10,
-    "use_lstm_policy": false
+    "use_lstm_policy": false,
+    "normalization_method": "log_returns",
+    "reward_shaping": {
+      "incremental_reward_scale": 5000,
+      "trade_execution_reward": 0.01,
+      "momentum_reward_scale": 0.3,
+      "hold_profit_reward_scale": 0.02,
+      "entry_quality_reward_scale": 0.05,
+      "end_episode_reward_scale": 10,
+      "sharpe_reward_scale": 0.1,
+      "drawdown_penalty_scale": 2.0,
+      "position_sizing_reward_scale": 0.01,
+      "pnl_penalty_scale": 100
+    }
   },
   "btc": {
     "initial_capital": 10000,

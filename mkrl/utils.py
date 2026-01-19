@@ -3,7 +3,22 @@ Utility functions for trading strategy execution and metrics calculation.
 """
 
 import numpy as np
+import sys
+from enum import Enum
 from mkrl.settings import n_price_points
+
+
+class NormalizationMethod(str, Enum):
+    """Enumeration of available price normalization methods."""
+    PERCENTAGE_CHANGES = "percentage_changes"
+    LOG_RETURNS = "log_returns"
+    Z_SCORE = "z-score"
+    PRICE_RATIO = "price_ratio"
+    
+    @classmethod
+    def values(cls):
+        """Return list of all valid enum values."""
+        return [item.value for item in cls]
 
 
 def format_time(seconds):
@@ -56,6 +71,71 @@ def realistic_price_feed(
         prices.append(prices[-1] * np.exp(ret))
         ret_prev = ret
     return np.array(prices)
+
+
+def normalize_prices(prices, method):
+    """
+    Normalize price data using the specified method.
+    
+    Args:
+        prices: Array of price values
+        method: NormalizationMethod enum value or string
+    
+    Returns:
+        Normalized price array
+    """
+    if isinstance(method, str):
+        try:
+            method = NormalizationMethod(method)
+        except ValueError:
+            available = ", ".join(NormalizationMethod.values())
+            print(f"ERROR: Incorrect price normalization method '{method}', available: {available}", file=sys.stderr)
+            sys.exit(1)
+    
+    if method == NormalizationMethod.PERCENTAGE_CHANGES:
+        # Percentage Changes: (price_t - price_{t-1}) / price_{t-1}
+        normalized = np.zeros_like(prices)
+        normalized[0] = 0.0  # First value is 0 (no previous price)
+        for i in range(1, len(prices)):
+            if prices[i-1] > 0:
+                normalized[i] = (prices[i] - prices[i-1]) / prices[i-1]
+            else:
+                normalized[i] = 0.0
+        return normalized
+    
+    elif method == NormalizationMethod.LOG_RETURNS:
+        # Log Returns: log(price_t / price_{t-1})
+        normalized = np.zeros_like(prices)
+        normalized[0] = 0.0  # First value is 0 (no previous price)
+        for i in range(1, len(prices)):
+            if prices[i-1] > 0 and prices[i] > 0:
+                normalized[i] = np.log(prices[i] / prices[i-1])
+            else:
+                normalized[i] = 0.0
+        return normalized
+    
+    elif method == NormalizationMethod.Z_SCORE:
+        # Z-score Normalization: (price - mean) / std
+        mean_price = np.mean(prices)
+        std_price = np.std(prices)
+        if std_price > 0:
+            normalized = (prices - mean_price) / std_price
+        else:
+            normalized = np.zeros_like(prices)
+        return normalized
+    
+    elif method == NormalizationMethod.PRICE_RATIO:
+        # Price Ratio: price_t / price_0 (normalized by first price)
+        if len(prices) > 0 and prices[0] > 0:
+            normalized = prices / prices[0]
+        else:
+            normalized = np.ones_like(prices)
+        return normalized
+    
+    else:
+        available = ", ".join(NormalizationMethod.values())
+        print(f"ERROR: Incorrect price normalization method '{method}', available: {available}", file=sys.stderr)
+        sys.exit(1)
 
 
 def calculate_metrics(portfolio_values, initial_capital):

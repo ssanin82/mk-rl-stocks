@@ -19,11 +19,11 @@ if __name__ == "__main__":
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from mkrl.env import TradingEnv
-from mkrl.utils import format_time
+from mkrl.utils import format_time, normalize_prices, NormalizationMethod
 from mkrl.settings import (
     initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
     training_episodes, default_prices_file, default_model_file, train_split_ratio,
-    use_lstm_policy
+    use_lstm_policy, normalization_method
 )
 
 
@@ -205,7 +205,17 @@ def main():
     all_prices = load_prices(args.prices)
     print(f"  Loaded {len(all_prices)} price points")
     
-    # Split into training set
+    # Validate normalization method
+    try:
+        norm_method = NormalizationMethod(normalization_method)
+    except ValueError:
+        available = ", ".join(NormalizationMethod.values())
+        print(f"ERROR: Incorrect price normalization method '{normalization_method}', available: {available}", file=sys.stderr)
+        sys.exit(1)
+    
+    print(f"  Using normalization method: {norm_method.value}")
+    
+    # Split into training set (use actual prices for trading, normalization happens in observation space)
     split_idx = int(len(all_prices) * args.split)
     train_prices = all_prices[:split_idx]
     print(f"  Using first {len(train_prices)} prices ({args.split*100:.0f}%) for training")

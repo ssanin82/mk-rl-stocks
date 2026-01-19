@@ -33,12 +33,25 @@ def run_strategy(env, model, log_file=None):
     portfolio_values = []
     trades = []  # Store trade details
     prev_price = None  # Track previous price for price move calculations
+    prev_norm_price = None  # Track previous normalized price for normalized move calculations
     force_sell_index = None  # Track the last force-sell step
     
     total_fees = 0.0  # Track total trading fees paid
     
+    # Get normalization method abbreviation (max 8 characters)
+    norm_method = env.normalization_method
+    norm_abbrev_map = {
+        "percentage_changes": "PctChg",
+        "log_returns": "LogRet",
+        "z-score": "ZScore",
+        "price_ratio": "PriceRt"
+    }
+    norm_column_name = norm_abbrev_map.get(norm_method.value, "Norm")
+    
     if log_file:
-        log_file.write(f"{'Step':<6} {'Price':<10} {'Move %':<10} {'Move $':<10} {'Action':<7} {'Flag':<7} {'Qty':<10} {'Cash':<12} {'Position':<12} {'Fee':<10} {'Portfolio':<12} {'AEP':<10} {'Note':<50}\n")
+        # Column header: show method name and format hint
+        norm_header = f"{norm_column_name:<18}"  # Allow space for "ratio (move)" format
+        log_file.write(f"{'Step':<6} {'Price':<10} {norm_header} {'Action':<7} {'Flag':<7} {'Qty':<10} {'Cash':<12} {'Position':<12} {'Fee':<10} {'Portfolio':<12} {'AEP':<10} {'Note':<50}\n")
         log_file.write("-" * 170 + "\n")
     
     done = False
@@ -61,16 +74,21 @@ def run_strategy(env, model, log_file=None):
         
         # Record state before action
         price = env.prices[env.current_step]
+        norm_price = env.normalized_prices[env.current_step]  # Get normalized price
         cash_before = env.cash
         holdings_before = env.holdings
         avg_entry_before = env.avg_entry_price if env.avg_entry_price > 0 else 0.0  # Get entry price before step
         
-        # Calculate price move
-        if prev_price is not None:
-            price_move_dollar = price - prev_price
-            price_move_pct = (price_move_dollar / prev_price) * 100 if prev_price > 0 else 0.0
+        # Calculate normalized price move
+        if prev_norm_price is not None:
+            norm_move = norm_price - prev_norm_price
         else:
-            price_move_dollar = 0.0
+            norm_move = 0.0
+        
+        # Calculate price move (for notes/descriptions)
+        if prev_price is not None:
+            price_move_pct = ((price - prev_price) / prev_price) * 100 if prev_price > 0 else 0.0
+        else:
             price_move_pct = 0.0
         
         # Execute action
@@ -95,8 +113,9 @@ def run_strategy(env, model, log_file=None):
         portfolio_after = env.cash + env.holdings * env.prices[current_price_idx]
         portfolio_values.append(portfolio_after)
         
-        # Update previous price for next iteration
+        # Update previous price and normalized price for next iteration
         prev_price = price
+        prev_norm_price = norm_price
         
         # Calculate fees for any trades executed (always track, even if not logging)
         fee_this_step = 0.0
@@ -268,10 +287,34 @@ def run_strategy(env, model, log_file=None):
             # Get average entry price for AEP column (0.0 if no position)
             avg_entry_price = env.avg_entry_price if env.holdings > 0 else 0.0
             
+            # Format normalized price ratio and move based on method
+            if norm_method.value == "percentage_changes":
+                # Percentage changes: show as percentage with move
+                norm_display = f"{norm_price*100:>+8.4f}%"
+                norm_move_display = f"{norm_move*100:>+7.4f}%"
+            elif norm_method.value == "log_returns":
+                # Log returns: show as percentage (scaled) with move
+                norm_display = f"{norm_price*100:>+8.4f}%"
+                norm_move_display = f"{norm_move*100:>+7.4f}%"
+            elif norm_method.value == "z-score":
+                # Z-score: show as decimal with move
+                norm_display = f"{norm_price:>+9.4f}"
+                norm_move_display = f"{norm_move:>+8.4f}"
+            elif norm_method.value == "price_ratio":
+                # Price ratio: show as ratio with move
+                norm_display = f"{norm_price:>+9.4f}"
+                norm_move_display = f"{norm_move:>+8.4f}"
+            else:
+                # Fallback
+                norm_display = f"{norm_price:>+9.4f}"
+                norm_move_display = f"{norm_move:>+8.4f}"
+            
+            # Format: show ratio (move) - e.g., "+0.0152% (+0.0152%)" or "+1.0002 (+0.0002)"
+            norm_column_value = f"{norm_display} ({norm_move_display})"
+            
             log_file.write(
                 f"{len(actions)-1:<6} ${price:<9.2f} "
-                f"{price_move_pct:>+8.4f}% "
-                f"${price_move_dollar:>+9.2f} "
+                f"{norm_column_value:<20} "
                 f"{action_name:<7} "
                 f"{flag:<7} "
                 f"{qty:>+10.4f} "
