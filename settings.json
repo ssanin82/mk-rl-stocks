@@ -33,7 +33,7 @@
       "position_sizing_reward_scale": 0.01,
       "pnl_penalty_scale": 10,
       "entry_incentive_reward": 5.0,
-      "invalid_sell_penalty": -2.0,
+      "invalid_sell_penalty": -1000.0,
       "no_position_hold_penalty": -0.5,
       "has_position_reward": 0.02,
       "full_cash_no_position_penalty": -1.0,
@@ -48,7 +48,7 @@
   },
   "btc": {
     "initial_capital": 10000,
-    "min_notional": 100.0,
+    "min_notional": 50.0,
     "min_size": 0.001,
     "trading_fee_rate": 0.0001,
     "profit_threshold": 0.002,

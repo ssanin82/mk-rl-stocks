@@ -207,6 +207,11 @@ def main():
     
     # Load prices
     print(f"Loading prices from {args.prices}...")
+    print("\n" + "="*70)
+    print("IMPORTANT: This model uses AGGRESSIVE reward shaping for trading!")
+    print("The model will be penalized heavily for NOT trading.")
+    print("Make sure settings.json has the latest reward parameters.")
+    print("="*70 + "\n")
     all_prices = load_prices(args.prices)
     print(f"  Loaded {len(all_prices)} price points")
     

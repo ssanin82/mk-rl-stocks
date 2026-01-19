@@ -76,8 +76,10 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
         log_file.write("-" * 170 + "\n")
     
     done = False
+    forced_buy_executed = False  # Track if forced buy was executed this step
     while not done:
         # FORCED BUY LOGIC: Force initial buys during first N steps if no trade occurred
+        forced_buy_executed = False  # Reset each iteration
         if force_initial_buys and step_count > 0 and step_count % forced_buy_delay == 0:
             if not env.has_ever_traded and env.holdings == 0:
                 # Force a buy action
@@ -85,10 +87,21 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                 shares = max(forced_buy_size, env.min_size)
                 shares = env._round_to_lot_size(shares)
                 notional = shares * price
+                
+                # FIXED: Improved auto-increase logic to ensure trades aren't blocked
+                # If below min_notional, increase to meet requirement
+                if notional < env.min_notional and price > 0:
+                    min_shares_for_notional = env.min_notional / price
+                    min_shares_for_notional = env._round_to_lot_size(min_shares_for_notional)
+                    shares = max(shares, min_shares_for_notional)
+                    notional = shares * price
+                
                 fee = notional * env.trading_fee_rate
                 total_cost = notional + fee
                 
-                if env.cash >= total_cost and notional >= env.min_notional:
+                if env.cash >= total_cost:
+                    # FIXED: Record holdings BEFORE forced buy to calculate qty correctly
+                    holdings_before_forced = env.holdings
                     # Execute forced buy
                     env.holdings += shares
                     env.cash -= total_cost
@@ -98,13 +111,26 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                     if env.holdings > 0:
                         env.avg_entry_price = env.total_cost_basis / env.holdings
                         current_norm_price = env.normalized_prices[env.current_step]
-                        env.normalized_entry_price = current_norm_price
+                        if env.normalized_entry_price == 0.0:
+                            env.normalized_entry_price = current_norm_price
+                        else:
+                            # Volume-weighted average
+                            old_shares = holdings_before_forced
+                            if old_shares > 0:
+                                env.normalized_entry_price = (
+                                    (env.normalized_entry_price * old_shares) + 
+                                    (current_norm_price * shares)
+                                ) / env.holdings
+                            else:
+                                env.normalized_entry_price = current_norm_price
                     env.has_ever_traded = True
                     env.last_trade_step = env.current_step
                     env.steps_since_last_trade = 0
-                    # Set action to BUY for logging purposes
-                    action = 1
-                    original_action = 1
+                    env.steps_without_trade = 0  # Reset accumulating penalty
+                    # Set action to HOLD to avoid double-buy in env.step()
+                    action = 0  # FIXED: Use HOLD to prevent double execution
+                    original_action = 0  # Track that this was a forced buy (not model action)
+                    forced_buy_executed = True  # Mark that forced buy happened
                 else:
                     # Can't afford forced buy, proceed with model prediction
                     action, _ = model.predict(obs, deterministic=True)
@@ -121,28 +147,32 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
             action = int(action)
             original_action = action
         
-        # ACTION MASKING: Filter invalid actions
-        # Observation contains can_buy (index 6) and can_sell (index 7) flags
+        # ACTION MASKING: REMOVED - Let environment handle invalid actions
+        # This allows the model to learn from penalties for invalid actions
+        # The environment will handle invalid actions appropriately and provide feedback
+        # Observation contains can_buy (index 6) and can_sell (index 7) flags for model to learn
         can_buy = obs[6] > 0.5
         can_sell = obs[7] > 0.5
         
-        # Only filter if action wasn't forced
-        if not (force_initial_buys and step_count > 0 and step_count % forced_buy_delay == 0 and 
-                not env.has_ever_traded and env.holdings == 0 and action == 1):
-            if action == 1 and not can_buy:  # BUY but can't afford it
-                action = 0  # Convert to HOLD
-            elif action == 2 and not can_sell:  # SELL but no holdings
-                action = 0  # Convert to HOLD
+        # Only keep forced buys - don't filter model predictions
+        # Let the model learn from trying invalid actions (they get penalties)
         
         step_count += 1
         
-        actions.append(action)
+        # FIXED: Store executed action for chart, not attempted action
+        # Only append SELL (2) if it will actually execute (has holdings)
+        # Otherwise, store as HOLD (0) so chart doesn't show invalid SELL signals
+        if action == 2 and holdings_before == 0:
+            # Invalid SELL attempt - store as HOLD for chart
+            actions.append(0)  # Store as HOLD
+        else:
+            actions.append(action)
         
-        # Record state before action
+        # Record state before action (BEFORE forced buy execution)
         price = env.prices[env.current_step]
         norm_price = env.normalized_prices[env.current_step]  # Get normalized price
         cash_before = env.cash
-        holdings_before = env.holdings
+        holdings_before = env.holdings  # FIXED: This is now BEFORE forced buy (if any)
         avg_entry_before = env.avg_entry_price if env.avg_entry_price > 0 else 0.0  # Get entry price before step
         
         # Calculate normalized price move
@@ -233,8 +263,21 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
             fee = fee_this_step  # Use calculated fee
             note = ""  # Explanation of why action was taken
             
+            # Check if forced buy executed (highest priority for logging)
+            if forced_buy_executed_this_step:
+                action_name = "BUY"  # Forced buy should show as BUY
+                flag = "FORCE"
+                # Calculate qty from holdings change (forced buy shares)
+                forced_buy_shares = holdings_after - holdings_before
+                qty = forced_buy_shares  # Positive for buys
+                if forced_buy_shares > 0:
+                    notional = forced_buy_shares * price
+                    fee = notional * trading_fee_rate
+                    total_fees += fee  # Add to total fees
+                note = "Forced buy - initial entry"
+                trades.append({"step": len(actions)-1, "type": "BUY (FORCE)", "price": price, "shares": forced_buy_shares})
             # Check if force-sell executed (highest priority for logging)
-            if force_sell_executed:
+            elif force_sell_executed:
                 action_name = "SELL"  # Force-sell should show as SELL, not HOLD
                 flag = "FORCE"
                 qty = qty_this_step  # Already calculated
@@ -306,8 +349,9 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                     fee = 0.0
                     note = "Model buy - attempted but not executed"
             elif action == 2:  # Sell
-                action_name = "SELL"
+                # FIXED: Check if SELL was actually executed before setting action_name
                 if holdings_after < holdings_before:  # Trade executed (holdings decreased)
+                    action_name = "SELL"  # Only set to SELL if actually executed
                     shares_sold = holdings_before - holdings_after
                     qty = qty_this_step  # Already calculated
                     fee = fee_this_step  # Already calculated
@@ -330,9 +374,11 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
                     
                     trades.append({"step": len(actions)-1, "type": "SELL", "price": price, "shares": shares_sold})
                 else:
+                    # FIXED: Invalid SELL attempt - show as HOLD, not SELL
+                    action_name = "HOLD"  # Changed from SELL to HOLD for invalid attempts
                     qty = 0.0
                     fee = 0.0
-                    note = "Model sell - attempted but not executed"
+                    note = "INVALID SELL - attempted but no holdings (position = 0)"
             else:  # HOLD
                 action_name = "HOLD"
                 # Create more descriptive note for HOLD

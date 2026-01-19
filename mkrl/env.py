@@ -313,7 +313,8 @@ class TradingEnv(gym.Env):
                 reward += aggressive_trading_bonus
             
             # EXPLORATION BONUS: Reward any BUY when position is zero (encourages exploration)
-            if action == 1 and self.holdings > 0:
+            # Fix: Reward BUY when holdings == 0 (before entry), not when holdings > 0 (after entry)
+            if action == 1 and self.holdings == 0:
                 reward += exploration_bonus * risk_taking_multiplier
             
             # INITIAL TRAINING PHASE: Fixed reward for any trade in first 10% of episode
@@ -638,10 +639,17 @@ class TradingEnv(gym.Env):
             entry_price_ratio = 1.0
         
         # Action validity flags (tell model which actions are valid)
-        # Check if we can afford minimum buy
+        # FIXED: Check if we can afford minimum buy (accounting for min_notional requirement)
         shares_needed_for_notional = self.min_notional / price if price > 0 else 0
         min_trade_shares = max(self.min_size, shares_needed_for_notional)
-        min_trade_cost = min_trade_shares * price * (1 + self.trading_fee_rate)
+        min_trade_shares = self._round_to_lot_size(min_trade_shares)  # Round to lot size
+        # Ensure notional meets minimum after rounding
+        actual_notional = min_trade_shares * price
+        if actual_notional < self.min_notional and price > 0:
+            # Auto-increase shares to meet min_notional
+            min_trade_shares = self._round_to_lot_size(self.min_notional / price)
+            actual_notional = min_trade_shares * price
+        min_trade_cost = actual_notional * (1 + self.trading_fee_rate)
         can_buy = 1.0 if self.cash >= min_trade_cost else 0.0
         can_sell = 1.0 if self.holdings > 0 else 0.0
         
@@ -713,6 +721,16 @@ class TradingEnv(gym.Env):
             trade_shares = max(self.min_size, shares_needed_for_notional)
             trade_shares = self._round_to_lot_size(trade_shares)  # Round to lot size
             notional = trade_shares * price
+            
+            # FIXED: Auto-increase trade size if notional < min_notional (up to available cash)
+            if notional < self.min_notional and price > 0:
+                # Calculate minimum shares needed for min_notional
+                min_shares_for_notional = self.min_notional / price
+                min_shares_for_notional = self._round_to_lot_size(min_shares_for_notional)
+                # Use the larger of the two
+                trade_shares = max(trade_shares, min_shares_for_notional)
+                notional = trade_shares * price
+            
             fee = notional * self.trading_fee_rate
             total_cost = notional + fee
             
@@ -1018,6 +1036,7 @@ class TradingEnv(gym.Env):
             steps_remaining_ratio=steps_remaining_ratio,
             current_price=current_price,
             invalid_sell_attempted=invalid_sell_attempted,
+            invalid_sell_attempted_flag=1.0 if invalid_sell_attempted else 0.0,  # Add to info for logging
             was_first_trade=was_first_trade
         )
         
@@ -1032,5 +1051,9 @@ class TradingEnv(gym.Env):
             info['force_sell_executed'] = True
             info['force_sell_shares'] = force_sell_shares
             info['force_sell_price'] = self.prices[min(self.current_step, len(self.prices) - 1)]
+        
+        # Include invalid SELL flag in info for logging
+        if invalid_sell_attempted:
+            info['invalid_sell_attempted'] = True
         
         return self._get_obs(), reward, terminated, truncated, info
