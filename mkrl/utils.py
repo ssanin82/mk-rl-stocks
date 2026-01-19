@@ -3,7 +3,7 @@ Utility functions for trading strategy execution and metrics calculation.
 """
 
 import numpy as np
-from mkrl.settings import trading_fee_rate, n_price_points
+from mkrl.settings import n_price_points
 
 
 def format_time(seconds):

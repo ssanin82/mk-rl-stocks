@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 import requests
 import time
-# import pprint
 
 # Add parent directory to Python path if running as a script
 if __name__ == "__main__":

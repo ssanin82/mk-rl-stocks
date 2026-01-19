@@ -22,8 +22,77 @@ from mkrl.env import TradingEnv
 from mkrl.utils import format_time
 from mkrl.settings import (
     initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
-    training_episodes, default_prices_file, default_model_file, train_split_ratio
+    training_episodes, default_prices_file, default_model_file, train_split_ratio,
+    use_lstm_policy
 )
+
+
+def create_training_complete_html(training_time, model_path, train_prices_count, episodes, training_timesteps):
+    """Create and save HTML page showing training completion summary."""
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Training Complete</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }}
+        .container {{
+            text-align: center;
+            padding: 40px;
+            background: #2a2a2a;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }}
+        h1 {{
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }}
+        .message {{
+            font-size: 24px;
+            margin: 20px 0;
+        }}
+        .time {{
+            font-size: 32px;
+            color: #81C784;
+            font-weight: bold;
+            margin: 20px 0;
+        }}
+        .details {{
+            margin-top: 30px;
+            color: #b0b0b0;
+            font-size: 14px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✓ Model Training Complete!</h1>
+        <div class="message">Training time:</div>
+        <div class="time">{format_time(training_time)}</div>
+        <div class="details">
+            <p>Model saved to: <code>{model_path.name}</code></p>
+            <p>Training data: {train_prices_count} prices</p>
+            <p>Episodes: {episodes}</p>
+            <p>Total timesteps: {training_timesteps:,}</p>
+        </div>
+    </div>
+</body>
+</html>"""
+    
+    # Save to temporary HTML file
+    html_file = Path("training_complete.html")
+    with open(html_file, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    return html_file.resolve()
 
 
 def load_prices(prices_file):
@@ -188,8 +257,27 @@ def main():
             tensorboard_available = False
             tensorboard_log_dir = None
         
+        # Choose policy based on settings
+        # Note: For LSTM policies, you would need sb3-contrib or custom feature extractors
+        # The price_history_window already provides temporal context to the MLP
+        if use_lstm_policy:
+            # For LSTM, we'll use a deeper MLP that can learn patterns from price history
+            # The price history is already included in observations via price_history_window
+            print("Note: Using enhanced MLP with price history (LSTM requires sb3-contrib)")
+            policy_kwargs = {
+                "net_arch": [dict(pi=[256, 256, 128], vf=[256, 256, 128])],  # Deeper network
+            }
+            policy_name = "MlpPolicy"
+        else:
+            # Enhanced MLP policy with price history
+            policy_kwargs = {
+                "net_arch": [dict(pi=[256, 256, 128], vf=[256, 256, 128])],  # Deeper network for richer features
+            }
+            policy_name = "MlpPolicy"
+        
         model_kwargs = {
-            "policy": "MlpPolicy",
+            "policy": policy_name,
+            "policy_kwargs": policy_kwargs,
             "env": env_train,
             "verbose": 1,
             "learning_rate": 3e-4,
@@ -228,70 +316,13 @@ def main():
     print(f"✓ Model saved to {model_path.absolute()}")
     
     # Create and open completion page in browser
-    html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Training Complete</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            background: #1a1a1a;
-            color: #e0e0e0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-        }}
-        .container {{
-            text-align: center;
-            padding: 40px;
-            background: #2a2a2a;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }}
-        h1 {{
-            color: #4CAF50;
-            margin-bottom: 20px;
-        }}
-        .message {{
-            font-size: 24px;
-            margin: 20px 0;
-        }}
-        .time {{
-            font-size: 32px;
-            color: #81C784;
-            font-weight: bold;
-            margin: 20px 0;
-        }}
-        .details {{
-            margin-top: 30px;
-            color: #b0b0b0;
-            font-size: 14px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>✓ Model Training Complete!</h1>
-        <div class="message">Training time:</div>
-        <div class="time">{format_time(training_time)}</div>
-        <div class="details">
-            <p>Model saved to: <code>{model_path.name}</code></p>
-            <p>Training data: {len(train_prices)} prices</p>
-            <p>Episodes: {args.episodes}</p>
-            <p>Total timesteps: {training_timesteps:,}</p>
-        </div>
-    </div>
-</body>
-</html>"""
-    
-    # Save to temporary HTML file
-    html_file = Path("training_complete.html")
-    with open(html_file, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    html_path = html_file.resolve()
+    html_path = create_training_complete_html(
+        training_time=training_time,
+        model_path=model_path,
+        train_prices_count=len(train_prices),
+        episodes=args.episodes,
+        training_timesteps=training_timesteps
+    )
     print(f"\nOpening completion page in browser...")
     webbrowser.open(html_path.as_uri())
 

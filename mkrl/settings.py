@@ -29,6 +29,8 @@ momentum_reward_scale = _common_settings.get("momentum_reward_scale")
 train_split_ratio = _common_settings.get("train_split_ratio")
 default_model_file = _common_settings.get("default_model_file")
 pnl_penalty = _common_settings.get("pnl_penalty")
+price_history_window = _common_settings.get("price_history_window", 10)
+use_lstm_policy = _common_settings.get("use_lstm_policy", False)
 
 # BTC-specific settings
 initial_capital = _btc_settings.get("initial_capital")

@@ -5,7 +5,6 @@ One price per line.
 
 import sys
 from pathlib import Path
-import numpy as np
 import argparse
 
 # Add parent directory to Python path if running as a script

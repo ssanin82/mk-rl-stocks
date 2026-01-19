@@ -7,7 +7,7 @@ import numpy as np
 from mkrl.settings import (
     trade_execution_reward, momentum_reward_scale,
     profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio,
-    lot_size, pnl_penalty
+    lot_size, pnl_penalty, price_history_window
 )
 
 
@@ -26,8 +26,12 @@ class TradingEnv(gym.Env):
         self.avg_entry_price = 0.0  # Volume-weighted average entry price
         self.total_cost_basis = 0.0  # Total cost basis for calculating average entry price
         self.action_space = gym.spaces.Discrete(3)
-        # Observation: [log_return, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell]
-        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32)
+        # Observation includes base features + price history
+        # Base: [log_return, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell]
+        # History: [price_history_window] log returns
+        self.price_history_window = price_history_window
+        obs_size = 8 + self.price_history_window
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float32)
     
     def _round_to_lot_size(self, shares):
         """Round trade quantity to the nearest lot_size increment."""
@@ -83,7 +87,8 @@ class TradingEnv(gym.Env):
         can_buy = 1.0 if self.cash >= min_trade_cost else 0.0
         can_sell = 1.0 if self.holdings > 0 else 0.0
         
-        return np.array([
+        # Base features
+        base_features = [
             log_return * 100,  # Log return (scaled by 100 for better learning signal)
             price_change * 100,  # Price change percentage
             relative_price,  # Relative price
@@ -92,7 +97,23 @@ class TradingEnv(gym.Env):
             entry_price_ratio,  # Current price / average entry price
             can_buy,  # 1.0 if can buy, 0.0 if cannot
             can_sell,  # 1.0 if can sell, 0.0 if cannot
-        ], dtype=np.float32)
+        ]
+        
+        # Add price history (log returns for last N steps)
+        price_history = []
+        for i in range(self.price_history_window):
+            hist_idx = self.current_step - (i + 1)
+            if hist_idx >= 0 and hist_idx < len(self.prices) - 1:
+                # Calculate log return for this historical step
+                if self.prices[hist_idx] > 0 and self.prices[hist_idx + 1] > 0:
+                    hist_log_return = np.log(self.prices[hist_idx + 1] / self.prices[hist_idx])
+                else:
+                    hist_log_return = 0.0
+            else:
+                hist_log_return = 0.0  # Pad with zeros if not enough history
+            price_history.append(hist_log_return * 100)  # Scale by 100
+        
+        return np.array(base_features + price_history, dtype=np.float32)
     
     def step(self, action):
         price = self.prices[self.current_step]
