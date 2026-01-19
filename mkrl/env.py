@@ -8,10 +8,17 @@ import numpy as np
 from mkrl.settings import (
     profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio,
     lot_size, price_history_window, normalization_method,
+    percentage_changes_step, log_returns_step, z_score_step, price_ratio_step,
+    dca_volatility_window, dca_max_tiers, dca_base_ratio, dca_tier_multiplier,
+    dca_virtual_entry_enabled, dca_virtual_entry_lookback,
     incremental_reward_scale, trade_execution_reward, momentum_reward_scale,
     hold_profit_reward_scale, entry_quality_reward_scale, end_episode_reward_scale,
     sharpe_reward_scale, drawdown_penalty_scale, position_sizing_reward_scale,
-    pnl_penalty_scale
+    pnl_penalty_scale, entry_incentive_reward, invalid_sell_penalty,
+    no_position_hold_penalty, has_position_reward, full_cash_no_position_penalty,
+    steps_since_trade_penalty_scale, pre_trade_buy_incentive, exploration_bonus,
+    initial_training_fixed_reward, no_trade_penalty_scale, aggressive_trading_bonus,
+    risk_taking_multiplier
 )
 from mkrl.utils import normalize_prices, NormalizationMethod
 
@@ -28,14 +35,25 @@ class TradingEnv(gym.Env):
         self.current_step = 0
         self.cash = initial_capital
         self.holdings = 0
-        self.avg_entry_price = 0.0  # Volume-weighted average entry price
+        self.avg_entry_price = 0.0  # Volume-weighted average entry price (actual prices)
+        self.normalized_entry_price = 0.0  # Normalized entry price for DCA triggers
         self.total_cost_basis = 0.0  # Total cost basis for calculating average entry price
         self.action_space = gym.spaces.Discrete(3)
-        # Observation includes base features + price history
-        # Base: [log_return, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell]
+        
+        # Track trading activity
+        self.has_ever_traded = False  # Track if any trade has been executed
+        self.steps_since_last_trade = 0  # Track steps since last trade
+        self.last_trade_step = -1  # Track the last step where a trade occurred
+        
+        # Virtual entry point for DCA when no position exists
+        self.virtual_entry_price = None  # Lowest price seen (for virtual DCA entry)
+        self.virtual_entry_norm_price = None  # Normalized lowest price
+        
+        # Observation includes base features + price history + activity flags
+        # Base: [log_return, price_change, relative_price, cash_ratio, holdings_ratio, entry_price_ratio, can_buy, can_sell, has_never_traded, steps_since_trade_normalized]
         # History: [price_history_window] log returns
         self.price_history_window = price_history_window
-        obs_size = 8 + self.price_history_window
+        obs_size = 10 + self.price_history_window  # Added 2 features: has_never_traded, steps_since_trade
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float32)
         
         # Validate and store normalization method
@@ -54,12 +72,91 @@ class TradingEnv(gym.Env):
         self.portfolio_history = []  # Store recent portfolio values for volatility/drawdown calculation
         self.price_history_for_entry = []  # Store recent prices for entry quality assessment
         self.max_portfolio_value = initial_capital  # Track peak for drawdown calculation
+        
+        # Track normalized price history for DCA volatility adjustment
+        self.normalized_price_history = []  # Store recent normalized prices for volatility calculation
     
     def _round_to_lot_size(self, shares):
         """Round trade quantity to the nearest lot_size increment."""
         if self.lot_size <= 0:
             return shares
         return round(shares / self.lot_size) * self.lot_size
+    
+    def _get_dca_step_value(self):
+        """Get the DCA step value based on current normalization method."""
+        if self.normalization_method == NormalizationMethod.PERCENTAGE_CHANGES:
+            return percentage_changes_step
+        elif self.normalization_method == NormalizationMethod.LOG_RETURNS:
+            return log_returns_step
+        elif self.normalization_method == NormalizationMethod.Z_SCORE:
+            return z_score_step
+        elif self.normalization_method == NormalizationMethod.PRICE_RATIO:
+            return price_ratio_step
+        else:
+            return 0.001  # Default fallback
+    
+    def _calculate_normalized_volatility(self):
+        """Calculate rolling volatility in normalized space for volatility-adjusted DCA."""
+        if len(self.normalized_price_history) < 2:
+            return 1.0  # No volatility data yet
+        
+        window_size = min(len(self.normalized_price_history), dca_volatility_window)
+        recent_norm_prices = self.normalized_price_history[-window_size:]
+        
+        if self.normalization_method == NormalizationMethod.Z_SCORE:
+            # For z-score, volatility is already in std dev units, just return std
+            return np.std(recent_norm_prices) if len(recent_norm_prices) > 1 else 1.0
+        elif self.normalization_method in [NormalizationMethod.PERCENTAGE_CHANGES, NormalizationMethod.LOG_RETURNS]:
+            # For percentage_changes and log_returns, calculate rolling std of normalized values
+            return np.std(recent_norm_prices) if len(recent_norm_prices) > 1 else 1.0
+        elif self.normalization_method == NormalizationMethod.PRICE_RATIO:
+            # For price_ratio, less useful for volatility, return 1.0 (no adjustment)
+            return 1.0
+        else:
+            return 1.0
+    
+    def _calculate_dca_tier(self, norm_price_diff):
+        """Calculate which DCA tier is triggered based on normalized price drop.
+        
+        Returns:
+            tier: Tier number (1, 2, 3, ...) or 0 if no tier triggered
+            tier_threshold: The threshold value for this tier
+        """
+        if self.normalized_entry_price == 0.0:
+            return 0, 0.0
+        
+        step_value = self._get_dca_step_value()
+        volatility = self._calculate_normalized_volatility()
+        
+        # Calculate volatility-adjusted step for z-score, percentage_changes, log_returns
+        if self.normalization_method == NormalizationMethod.Z_SCORE:
+            # For z-score, step is in std dev units, adjust by volatility
+            adjusted_step = step_value * max(volatility, 0.1)  # Minimum volatility of 0.1
+        elif self.normalization_method in [NormalizationMethod.PERCENTAGE_CHANGES, NormalizationMethod.LOG_RETURNS]:
+            # Scale step by volatility
+            adjusted_step = step_value * max(volatility, 0.0001)  # Minimum volatility
+        else:
+            # For price_ratio, no volatility adjustment
+            adjusted_step = step_value
+        
+        # Calculate normalized price drop (negative means price is below entry)
+        if self.normalization_method in [NormalizationMethod.PERCENTAGE_CHANGES, NormalizationMethod.LOG_RETURNS]:
+            # For these, norm_price_diff is already the difference
+            price_drop = -norm_price_diff  # Negative means drop
+        elif self.normalization_method == NormalizationMethod.Z_SCORE:
+            # For z-score, difference from entry
+            price_drop = self.normalized_entry_price - norm_price_diff  # How many std devs below entry
+        elif self.normalization_method == NormalizationMethod.PRICE_RATIO:
+            # For price_ratio, drop is entry - current (both are ratios)
+            price_drop = self.normalized_entry_price - norm_price_diff
+        
+        # Check multi-tier thresholds
+        for tier in range(1, dca_max_tiers + 1):
+            tier_threshold = -adjusted_step * tier  # Negative threshold (drop)
+            if price_drop <= tier_threshold:
+                return tier, tier_threshold
+        
+        return 0, 0.0
     
     def _calculate_reward_shaping(
         self,
@@ -72,7 +169,9 @@ class TradingEnv(gym.Env):
         position_mgmt_executed,
         done,
         steps_remaining_ratio,
-        current_price
+        current_price,
+        invalid_sell_attempted=False,
+        was_first_trade=False
     ):
         """
         Comprehensive reward shaping function to maximize P&L.
@@ -171,6 +270,12 @@ class TradingEnv(gym.Env):
         if len(self.price_history_for_entry) > 20:  # Keep last 20 prices
             self.price_history_for_entry.pop(0)
         
+        # Update normalized price history for DCA volatility calculation
+        current_norm_price = self.normalized_prices[min(self.current_step, len(self.normalized_prices) - 1)]
+        self.normalized_price_history.append(current_norm_price)
+        if len(self.normalized_price_history) > dca_volatility_window:
+            self.normalized_price_history.pop(0)
+        
         # Update max portfolio value for drawdown calculation
         if portfolio_value > self.max_portfolio_value:
             self.max_portfolio_value = portfolio_value
@@ -186,35 +291,111 @@ class TradingEnv(gym.Env):
         reward += incremental_reward
         
         # ====================================================================
-        # 2. CONDITIONAL TRADE EXECUTION REWARD
+        # 2. TRADE EXECUTION REWARDS (AGGRESSIVE - FAVOR ACTION)
         # ====================================================================
-        # Rationale: Only reward trades that improve portfolio or are strategically sound
-        # Prevents overtrading for the sake of fixed rewards
-        # Reward is conditional on trade quality, not just execution
+        # Rationale: Favor taking action over inaction. First trade is ALWAYS rewarded.
+        # Subsequent trades rewarded more liberally to encourage trading.
+        
+        # Check if we're in initial training phase (first 10% of episode)
+        total_steps = len(self.prices) - 1
+        initial_phase_ratio = self.current_step / max(total_steps, 1)
+        is_initial_training_phase = initial_phase_ratio < 0.1
+        
         if action_executed:
-            # Only reward if trade improved portfolio or we have momentum alignment
-            trade_improved_portfolio = incremental_change > 0
-            if self.current_step > 0:
-                price_change_pct = (price - prev_price) / prev_price if prev_price > 0 else 0.0
-                momentum_aligned = (
-                    (action == 1 and price_change_pct > 0) or  # Buy on rise
-                    (action == 2 and price_change_pct < 0)     # Sell on fall
-                )
-            else:
-                momentum_aligned = False
+            # UNCONDITIONAL: Always reward first trade heavily (no conditions)
+            if was_first_trade:
+                # Massive reward for first entry - ALWAYS given, no conditions
+                reward += entry_incentive_reward * risk_taking_multiplier
+                # Also give exploration bonus for first buy
+                if action == 1:
+                    reward += exploration_bonus * risk_taking_multiplier
+                # Aggressive trading bonus
+                reward += aggressive_trading_bonus
             
-            if trade_improved_portfolio or momentum_aligned:
-                # Scale reward by trade notional to reward larger strategic trades
-                if action == 1:  # BUY
-                    trade_notional = self.holdings * price if self.holdings > 0 else 0
-                else:  # SELL
-                    trade_notional = self.holdings * price if self.holdings > 0 else 0
-                notional_ratio = min(trade_notional / self.initial_capital, 1.0)
-                reward += trade_execution_reward * (1.0 + notional_ratio)
+            # EXPLORATION BONUS: Reward any BUY when position is zero (encourages exploration)
+            if action == 1 and self.holdings > 0:
+                reward += exploration_bonus * risk_taking_multiplier
+            
+            # INITIAL TRAINING PHASE: Fixed reward for any trade in first 10% of episode
+            if is_initial_training_phase:
+                reward += initial_training_fixed_reward * risk_taking_multiplier
+            
+            # SUBSEQUENT TRADES: Reward more liberally (less conservative)
+            if not was_first_trade:
+                # For subsequent trades, reward if:
+                # 1. Trade improved portfolio, OR
+                # 2. Momentum aligned, OR
+                # 3. Just any executed trade (more aggressive)
+                trade_improved_portfolio = incremental_change > 0
+                if self.current_step > 0:
+                    price_change_pct = (price - prev_price) / prev_price if prev_price > 0 else 0.0
+                    momentum_aligned = (
+                        (action == 1 and price_change_pct > 0) or  # Buy on rise
+                        (action == 2 and price_change_pct < 0)     # Sell on fall
+                    )
+                else:
+                    momentum_aligned = False
+                
+                # More aggressive: reward ANY trade, bonus for good trades
+                base_reward = trade_execution_reward * risk_taking_multiplier
+                if trade_improved_portfolio or momentum_aligned:
+                    # Bonus for good trades
+                    if action == 1:  # BUY
+                        trade_notional = self.holdings * price if self.holdings > 0 else 0
+                    else:  # SELL
+                        trade_notional = self.holdings * price if self.holdings > 0 else 0
+                    notional_ratio = min(trade_notional / self.initial_capital, 1.0)
+                    base_reward *= (1.0 + notional_ratio * 2.0)  # Larger bonus for good trades
+                
+                reward += base_reward
+            else:
+                # For first trade, also give base trade execution reward
+                reward += trade_execution_reward * risk_taking_multiplier
         
         # Also reward position management trades (they're rule-based and important)
         if position_mgmt_executed:
-            reward += trade_execution_reward
+            reward += trade_execution_reward * risk_taking_multiplier
+            # Check if this was the first trade via position management
+            if was_first_trade or (not self.has_ever_traded and self.holdings > 0):
+                reward += entry_incentive_reward * risk_taking_multiplier
+        
+        # HEAVY PENALTY for invalid SELL attempts (trying to sell with 0 holdings) - AGGRESSIVE
+        if invalid_sell_attempted:
+            reward += invalid_sell_penalty * risk_taking_multiplier  # Much larger penalty
+        
+        # PRE-TRADE INCENTIVE: Reward BUY action when has_never_traded (even if not executed yet) - AGGRESSIVE
+        if action == 1 and not self.has_ever_traded:
+            reward += pre_trade_buy_incentive * risk_taking_multiplier
+        
+        # ACCUMULATING PENALTY for holding without position (encourages entry) - AGGRESSIVE
+        # This penalty accumulates over time, creating increasing pressure to trade
+        if action == 0 and self.holdings == 0 and not action_executed:
+            # Base penalty
+            base_penalty = no_position_hold_penalty
+            # Accumulating penalty based on steps without trade
+            accumulating_penalty = no_trade_penalty_scale * self.steps_without_trade * self.steps_without_trade  # Quadratic growth
+            reward += (base_penalty - accumulating_penalty) * risk_taking_multiplier
+        
+        # ACCUMULATING PENALTY when has_never_traded (increasing pressure to enter)
+        if not self.has_ever_traded and not action_executed and action != 1:
+            # Heavy penalty that grows with time - forces entry
+            no_entry_penalty = -no_trade_penalty_scale * (self.steps_without_trade ** 2) * 2.0
+            reward += no_entry_penalty * risk_taking_multiplier
+        
+        # Reward for having a position (encourages maintaining positions)
+        if self.holdings > 0:
+            reward += has_position_reward * risk_taking_multiplier
+        
+        # HEAVY PENALTY for holding full cash with no position (stronger signal) - AGGRESSIVE
+        if self.cash >= self.initial_capital * 0.99 and self.holdings == 0:
+            # Also apply accumulating penalty
+            accumulating_penalty = no_trade_penalty_scale * self.steps_without_trade * 10.0
+            reward += (full_cash_no_position_penalty - accumulating_penalty) * risk_taking_multiplier
+        
+        # Penalty for extended time without trading (scales with steps) - AGGRESSIVE
+        if self.has_ever_traded and self.steps_since_last_trade > 0:
+            steps_penalty = -steps_since_trade_penalty_scale * (self.steps_since_last_trade ** 1.5)  # Exponential growth
+            reward += steps_penalty * risk_taking_multiplier
         
         # ====================================================================
         # 3. ENHANCED MOMENTUM REWARDS
@@ -349,13 +530,14 @@ class TradingEnv(gym.Env):
                 reward += over_leverage_penalty
         
         # ====================================================================
-        # 10. PROPORTIONAL P&L PENALTY
+        # 10. PROPORTIONAL P&L PENALTY (ONLY FOR NEGATIVE P&L)
         # ====================================================================
         # Rationale: Fixed penalties don't scale with loss magnitude
         # Larger losses should receive proportionally larger penalties
         # More nuanced feedback for learning
+        # Only penalize negative P&L, not zero (removes perverse incentive)
         if done:
-            if portfolio_change <= 0:
+            if portfolio_change < 0:  # Only penalize negative, not zero
                 # Proportional penalty based on loss magnitude
                 loss_ratio = abs(portfolio_change) / self.initial_capital
                 proportional_penalty = -pnl_penalty_scale * loss_ratio
@@ -379,11 +561,23 @@ class TradingEnv(gym.Env):
         self.cash = self.initial_capital
         self.holdings = 0
         self.avg_entry_price = 0.0
+        self.normalized_entry_price = 0.0
         self.total_cost_basis = 0.0
+        # Reset trading activity tracking
+        self.has_ever_traded = False
+        self.steps_since_last_trade = 0
+        self.last_trade_step = -1
+        self.steps_without_trade = 0
+        self.steps_without_trade = 0
+        # Reset virtual entry point
+        self.virtual_entry_price = None
+        self.virtual_entry_norm_price = None
         # Initialize portfolio history for reward shaping
         self.portfolio_history = [self.initial_capital]
         self.price_history_for_entry = [self.prices[0]] if len(self.prices) > 0 else []
         self.max_portfolio_value = self.initial_capital
+        # Initialize normalized price history
+        self.normalized_price_history = [self.normalized_prices[0]] if len(self.normalized_prices) > 0 else []
         return self._get_obs(), {}
     
     def _get_obs(self):
@@ -451,6 +645,11 @@ class TradingEnv(gym.Env):
         can_buy = 1.0 if self.cash >= min_trade_cost else 0.0
         can_sell = 1.0 if self.holdings > 0 else 0.0
         
+        # Trading activity features
+        has_never_traded_flag = 1.0 if not self.has_ever_traded else 0.0
+        # Normalize steps_since_last_trade (0-1 scale, capped at 100 steps = 1.0)
+        steps_since_trade_normalized = min(self.steps_since_last_trade / 100.0, 1.0) if self.has_ever_traded else 1.0
+        
         # Base features
         base_features = [
             price_feature,  # Normalized price feature (method-dependent)
@@ -461,6 +660,8 @@ class TradingEnv(gym.Env):
             entry_price_ratio,  # Current price / average entry price
             can_buy,  # 1.0 if can buy, 0.0 if cannot
             can_sell,  # 1.0 if can sell, 0.0 if cannot
+            has_never_traded_flag,  # 1.0 if never traded, 0.0 otherwise
+            steps_since_trade_normalized,  # Steps since last trade (normalized 0-1)
         ]
         
         # Add price history (using normalized prices based on method)
@@ -492,7 +693,19 @@ class TradingEnv(gym.Env):
         # Action 1: BUY - only valid if we have enough cash
         # Action 2: SELL - only valid if we have holdings > 0
         
+        # Track invalid SELL attempts for penalty
+        invalid_sell_attempted = False
+        if action == 2 and self.holdings == 0:
+            invalid_sell_attempted = True
+        
         action_executed = False
+        
+        # Track if this was the first trade
+        was_first_trade = not self.has_ever_traded
+        
+        # Track if position management rules triggered any trades (initialize early)
+        position_mgmt_executed = False
+        position_mgmt_action = None
         
         if action == 1:  # BUY
             # Check if we can afford a minimum trade
@@ -516,10 +729,31 @@ class TradingEnv(gym.Env):
                 self.total_cost_basis += cost_this_trade
                 if self.holdings > 0:
                     self.avg_entry_price = self.total_cost_basis / self.holdings
+                    # Update normalized entry price (volume-weighted average of normalized prices)
+                    current_norm_price = self.normalized_prices[self.current_step]
+                    if self.normalized_entry_price == 0.0:
+                        # First entry
+                        self.normalized_entry_price = current_norm_price
+                    else:
+                        # Volume-weighted average: (old_norm * old_shares + new_norm * new_shares) / total_shares
+                        old_shares = self.holdings - trade_shares
+                        if old_shares > 0:
+                            self.normalized_entry_price = (
+                                (self.normalized_entry_price * old_shares) + 
+                                (current_norm_price * trade_shares)
+                            ) / self.holdings
+                        else:
+                            self.normalized_entry_price = current_norm_price
                 else:
                     self.avg_entry_price = 0.0
+                    self.normalized_entry_price = 0.0
                 
                 action_executed = True
+                # Mark that trading has occurred
+                self.has_ever_traded = True
+                self.last_trade_step = self.current_step
+                self.steps_since_last_trade = 0
+                self.steps_without_trade = 0  # Reset accumulating penalty
             # If not enough cash, action is ignored (effectively HOLD)
             
         elif action == 2:  # SELL
@@ -549,18 +783,45 @@ class TradingEnv(gym.Env):
                         self.holdings -= trade_shares
                         if self.holdings > 0:
                             self.avg_entry_price = self.total_cost_basis / self.holdings
+                            # Normalized entry price stays same when selling proportionally
                         else:
                             self.avg_entry_price = 0.0
+                            self.normalized_entry_price = 0.0
                             self.total_cost_basis = 0.0
                     else:
                         self.holdings = 0.0
                         self.avg_entry_price = 0.0
+                        self.normalized_entry_price = 0.0
                         self.total_cost_basis = 0.0
                     
                     self.cash += proceeds
                     self.cash = max(0, self.cash)  # Safety check
                     action_executed = True
+                    # Mark that trading has occurred
+                    self.has_ever_traded = True
+                    self.last_trade_step = self.current_step
+                    self.steps_since_last_trade = 0
+                    self.steps_without_trade = 0  # Reset accumulating penalty
             # If no holdings, action is ignored (effectively HOLD)
+        
+        # Update steps_since_last_trade if no trade occurred this step
+        if not action_executed and not position_mgmt_executed:
+            if self.has_ever_traded:
+                self.steps_since_last_trade += 1
+            else:
+                # Update virtual entry point (lowest price seen) for DCA when no position
+                if dca_virtual_entry_enabled:
+                    if self.virtual_entry_price is None or price < self.virtual_entry_price:
+                        self.virtual_entry_price = price
+                        self.virtual_entry_norm_price = self.normalized_prices[self.current_step]
+                    # Keep virtual entry within lookback window
+                    if self.current_step >= dca_virtual_entry_lookback:
+                        lookback_prices = self.prices[max(0, self.current_step - dca_virtual_entry_lookback):self.current_step + 1]
+                        lookback_norm_prices = self.normalized_prices[max(0, self.current_step - dca_virtual_entry_lookback):self.current_step + 1]
+                        if len(lookback_prices) > 0:
+                            min_idx = np.argmin(lookback_prices)
+                            self.virtual_entry_price = lookback_prices[min_idx]
+                            self.virtual_entry_norm_price = lookback_norm_prices[min_idx]
             
         # Action 0 (HOLD) or invalid actions: do nothing
         
@@ -570,9 +831,7 @@ class TradingEnv(gym.Env):
         # They execute regardless of model action - this ensures active position management.
         # ========================================================================
         
-        # Track if position management rules triggered any trades
-        position_mgmt_executed = False
-        position_mgmt_action = None
+        # Note: position_mgmt_executed and position_mgmt_action are already initialized above
         
         # Rules 1 & 2: Position management when we have holdings
         # NOTE: These rules are CRITICAL for proper position management
@@ -597,13 +856,16 @@ class TradingEnv(gym.Env):
                     proceeds = notional - fee
                     
                     # Update average entry price
-                    cost_basis_of_sold = self.total_cost_basis * (shares_to_sell / self.holdings)
+                    old_holdings_for_profit = self.holdings
+                    cost_basis_of_sold = self.total_cost_basis * (shares_to_sell / old_holdings_for_profit)
                     self.total_cost_basis -= cost_basis_of_sold
                     self.holdings -= shares_to_sell
                     if self.holdings > 0:
                         self.avg_entry_price = self.total_cost_basis / self.holdings
+                        # Normalized entry price stays same when selling proportionally
                     else:
                         self.avg_entry_price = 0.0
+                        self.normalized_entry_price = 0.0
                         self.total_cost_basis = 0.0
                     
                     self.cash += proceeds
@@ -612,35 +874,102 @@ class TradingEnv(gym.Env):
                     position_mgmt_executed = True
                     position_mgmt_action = f"PROFIT_TAKE: Sold {shares_to_sell:.4f} @ ${price:.2f} ({partial_sell_ratio*100:.0f}% of position)"
             
-            # Rule 2: If price goes down dca_threshold% from average entry, add dca_ratio% to position
-            elif profit_pct <= -dca_threshold:  # e.g., -0.10 = 10% down
-                # Calculate how much to add (10% of current position value, converted to shares)
-                current_position_value = self.holdings * price
-                target_add_value = current_position_value * dca_ratio
-                shares_to_add = target_add_value / price if price > 0 else 0
-                # Ensure it meets minimum size
-                shares_to_add = max(shares_to_add, self.min_size)
-                shares_to_add = self._round_to_lot_size(shares_to_add)  # Round to lot size
+            # Rule 2: Multi-tier DCA based on normalized price drop
+            # Use normalized values for triggers, actual prices for position sizing
+            # Also supports virtual entry when no position exists
+            current_norm_price = self.normalized_prices[self.current_step]
+            use_virtual_entry = False
+            
+            # Determine entry price: use normalized_entry_price if exists, otherwise virtual entry
+            if self.normalized_entry_price != 0.0:
+                entry_norm_price = self.normalized_entry_price
+                norm_price_diff = current_norm_price - entry_norm_price
+            elif dca_virtual_entry_enabled and self.virtual_entry_norm_price is not None:
+                # Use virtual entry (lowest price seen) when no position exists
+                entry_norm_price = self.virtual_entry_norm_price
+                norm_price_diff = current_norm_price - entry_norm_price
+                use_virtual_entry = True
+            else:
+                entry_norm_price = None
+                norm_price_diff = 0.0
+            
+            if entry_norm_price is not None:
+                # Temporarily set normalized_entry_price for tier calculation
+                original_entry = self.normalized_entry_price
+                self.normalized_entry_price = entry_norm_price
+                # Calculate which tier is triggered
+                tier, tier_threshold = self._calculate_dca_tier(current_norm_price)
+                # Restore original
+                self.normalized_entry_price = original_entry
                 
-                notional = shares_to_add * price
-                fee = notional * self.trading_fee_rate
-                total_cost = notional + fee
-                
-                # Only add if we have enough cash and meet minimum notional
-                if self.cash >= total_cost and notional >= self.min_notional:
-                    # Execute automatic DCA buy
-                    self.holdings += shares_to_add
-                    self.cash -= total_cost
-                    self.cash = max(0, self.cash)
-                    
-                    # Update volume-weighted average entry price
-                    cost_this_trade = notional
-                    self.total_cost_basis += cost_this_trade
+                if tier > 0:  # DCA tier triggered
+                    # Calculate buy size: base_ratio scaled by tier and magnitude of decline
                     if self.holdings > 0:
-                        self.avg_entry_price = self.total_cost_basis / self.holdings
-                    # Track that position management rule executed a trade
-                    position_mgmt_executed = True
-                    position_mgmt_action = f"DCA: Added {shares_to_add:.4f} @ ${price:.2f} ({dca_ratio*100:.0f}% of position value)"
+                        current_position_value = self.holdings * price
+                    else:
+                        # Virtual entry: use minimum position value for initial entry
+                        current_position_value = self.min_notional * 2  # Use 2x min_notional as base
+                    
+                    # Scale buy size by tier (higher tier = larger buy)
+                    tier_ratio = dca_base_ratio * (dca_tier_multiplier ** (tier - 1))
+                    
+                    # Additional scaling by magnitude for z-score, percentage_changes, log_returns
+                    if self.normalization_method == NormalizationMethod.Z_SCORE:
+                        # Larger buys when far below entry (e.g., -2σ → larger buy)
+                        magnitude_scale = min(1.0 + abs(tier_threshold) / 2.0, 3.0)  # Cap at 3x
+                    elif self.normalization_method in [NormalizationMethod.PERCENTAGE_CHANGES, NormalizationMethod.LOG_RETURNS]:
+                        # Scale buy size by magnitude of decline
+                        magnitude_scale = min(1.0 + abs(tier_threshold) / 0.001, 2.0)  # Cap at 2x
+                    else:
+                        # For price_ratio, fixed ratio
+                        magnitude_scale = 1.0
+                    
+                    # Final buy ratio
+                    final_buy_ratio = tier_ratio * magnitude_scale
+                    target_add_value = current_position_value * final_buy_ratio
+                    shares_to_add = target_add_value / price if price > 0 else 0
+                    
+                    # Ensure it meets minimum size
+                    shares_to_add = max(shares_to_add, self.min_size)
+                    shares_to_add = self._round_to_lot_size(shares_to_add)  # Round to lot size
+                    
+                    notional = shares_to_add * price
+                    fee = notional * self.trading_fee_rate
+                    total_cost = notional + fee
+                    
+                    # Only add if we have enough cash and meet minimum notional
+                    if self.cash >= total_cost and notional >= self.min_notional:
+                        # Execute automatic DCA buy
+                        self.holdings += shares_to_add
+                        self.cash -= total_cost
+                        self.cash = max(0, self.cash)
+                        
+                        # Update volume-weighted average entry price (actual prices)
+                        cost_this_trade = notional
+                        self.total_cost_basis += cost_this_trade
+                        if self.holdings > 0:
+                            self.avg_entry_price = self.total_cost_basis / self.holdings
+                            # Update normalized entry price (volume-weighted average)
+                            old_shares = self.holdings - shares_to_add
+                            if old_shares > 0:
+                                self.normalized_entry_price = (
+                                    (self.normalized_entry_price * old_shares) + 
+                                    (current_norm_price * shares_to_add)
+                                ) / self.holdings
+                            else:
+                                self.normalized_entry_price = current_norm_price
+                        
+                        # Mark that trading has occurred
+                        self.has_ever_traded = True
+                        self.last_trade_step = self.current_step
+                        self.steps_since_last_trade = 0
+                        self.steps_without_trade = 0  # Reset accumulating penalty
+                        
+                        # Track that position management rule executed a trade
+                        position_mgmt_executed = True
+                        step_value = self._get_dca_step_value()
+                        entry_type = "VIRTUAL" if use_virtual_entry else "REAL"
+                        position_mgmt_action = f"DCA-T{tier}({entry_type}): Added {shares_to_add:.4f} @ ${price:.2f} (norm drop: {norm_price_diff:.6f}, tier threshold: {tier_threshold:.6f})"
         
         self.current_step += 1
         done = self.current_step >= len(self.prices) - 1
@@ -676,7 +1005,7 @@ class TradingEnv(gym.Env):
         steps_remaining_ratio = remaining_steps / max(total_steps, 1)
         
         # Calculate reward using comprehensive reward shaping function
-        # This function implements all 10 reward shaping strategies to maximize P&L
+        # This function implements all reward shaping strategies to maximize P&L
         reward = self._calculate_reward_shaping(
             portfolio_value=portfolio_value,
             prev_portfolio_value=prev_portfolio_value,
@@ -687,7 +1016,9 @@ class TradingEnv(gym.Env):
             position_mgmt_executed=position_mgmt_executed,
             done=done,
             steps_remaining_ratio=steps_remaining_ratio,
-            current_price=current_price
+            current_price=current_price,
+            invalid_sell_attempted=invalid_sell_attempted,
+            was_first_trade=was_first_trade
         )
         
         # Include position management info in info dict for logging/tracking

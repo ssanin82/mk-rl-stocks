@@ -22,12 +22,22 @@ from mkrl.utils import calculate_metrics
 from mkrl.web import create_static_html
 from mkrl.settings import (
     initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
-    default_prices_file, default_model_file, train_split_ratio
+    default_prices_file, default_model_file, train_split_ratio,
+    curriculum_forced_buy_delay, curriculum_forced_buy_size
 )
 
 
-def run_strategy(env, model, log_file=None):
-    """Run the trained model on the environment and log all actions."""
+def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_delay=10, forced_buy_size=0.001):
+    """Run the trained model on the environment and log all actions.
+    
+    Args:
+        env: Trading environment
+        model: Trained RL model
+        log_file: Optional file path for logging
+        force_initial_buys: If True, force initial buys during first N steps if no trade occurred
+        forced_buy_delay: Steps to wait before forcing a buy
+        forced_buy_size: Size of forced buy
+    """
     obs, info = env.reset()
     actions = []
     portfolio_values = []
@@ -37,6 +47,7 @@ def run_strategy(env, model, log_file=None):
     force_sell_index = None  # Track the last force-sell step
     
     total_fees = 0.0  # Track total trading fees paid
+    step_count = 0  # Track steps for forced buys
     
     # Get normalization method abbreviation (max 8 characters)
     norm_method = env.normalization_method
@@ -48,27 +59,82 @@ def run_strategy(env, model, log_file=None):
     }
     norm_column_name = norm_abbrev_map.get(norm_method.value, "Norm")
     
+    # Get DCA step value for current normalization method
+    dca_step_map = {
+        "percentage_changes": env._get_dca_step_value() if env.normalization_method.value == "percentage_changes" else None,
+        "log_returns": env._get_dca_step_value() if env.normalization_method.value == "log_returns" else None,
+        "z-score": env._get_dca_step_value() if env.normalization_method.value == "z-score" else None,
+        "price_ratio": env._get_dca_step_value() if env.normalization_method.value == "price_ratio" else None,
+    }
+    current_dca_step = dca_step_map.get(norm_method.value, 0.001)
+    
     if log_file:
         # Column header: show method name and format hint
         norm_header = f"{norm_column_name:<18}"  # Allow space for "ratio (move)" format
-        log_file.write(f"{'Step':<6} {'Price':<10} {norm_header} {'Action':<7} {'Flag':<7} {'Qty':<10} {'Cash':<12} {'Position':<12} {'Fee':<10} {'Portfolio':<12} {'AEP':<10} {'Note':<50}\n")
+        dca_header = f"{'DCA':<12}"  # Allow space for DCA step value
+        log_file.write(f"{'Step':<6} {'Price':<10} {norm_header} {dca_header} {'Action':<7} {'Flag':<7} {'Qty':<10} {'Cash':<12} {'Position':<12} {'Fee':<10} {'Portfolio':<12} {'AEP':<10} {'Note':<50}\n")
         log_file.write("-" * 170 + "\n")
     
     done = False
     while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        action = int(action)
+        # FORCED BUY LOGIC: Force initial buys during first N steps if no trade occurred
+        if force_initial_buys and step_count > 0 and step_count % forced_buy_delay == 0:
+            if not env.has_ever_traded and env.holdings == 0:
+                # Force a buy action
+                price = env.prices[env.current_step]
+                shares = max(forced_buy_size, env.min_size)
+                shares = env._round_to_lot_size(shares)
+                notional = shares * price
+                fee = notional * env.trading_fee_rate
+                total_cost = notional + fee
+                
+                if env.cash >= total_cost and notional >= env.min_notional:
+                    # Execute forced buy
+                    env.holdings += shares
+                    env.cash -= total_cost
+                    env.cash = max(0, env.cash)
+                    cost_this_trade = notional
+                    env.total_cost_basis += cost_this_trade
+                    if env.holdings > 0:
+                        env.avg_entry_price = env.total_cost_basis / env.holdings
+                        current_norm_price = env.normalized_prices[env.current_step]
+                        env.normalized_entry_price = current_norm_price
+                    env.has_ever_traded = True
+                    env.last_trade_step = env.current_step
+                    env.steps_since_last_trade = 0
+                    # Set action to BUY for logging purposes
+                    action = 1
+                    original_action = 1
+                else:
+                    # Can't afford forced buy, proceed with model prediction
+                    action, _ = model.predict(obs, deterministic=True)
+                    action = int(action)
+                    original_action = action
+            else:
+                # Already traded or has position, proceed with model prediction
+                action, _ = model.predict(obs, deterministic=True)
+                action = int(action)
+                original_action = action
+        else:
+            # Normal model prediction
+            action, _ = model.predict(obs, deterministic=True)
+            action = int(action)
+            original_action = action
         
         # ACTION MASKING: Filter invalid actions
         # Observation contains can_buy (index 6) and can_sell (index 7) flags
         can_buy = obs[6] > 0.5
         can_sell = obs[7] > 0.5
         
-        original_action = action
-        if action == 1 and not can_buy:  # BUY but can't afford it
-            action = 0  # Convert to HOLD
-        elif action == 2 and not can_sell:  # SELL but no holdings
-            action = 0  # Convert to HOLD
+        # Only filter if action wasn't forced
+        if not (force_initial_buys and step_count > 0 and step_count % forced_buy_delay == 0 and 
+                not env.has_ever_traded and env.holdings == 0 and action == 1):
+            if action == 1 and not can_buy:  # BUY but can't afford it
+                action = 0  # Convert to HOLD
+            elif action == 2 and not can_sell:  # SELL but no holdings
+                action = 0  # Convert to HOLD
+        
+        step_count += 1
         
         actions.append(action)
         
@@ -312,9 +378,25 @@ def run_strategy(env, model, log_file=None):
             # Format: show ratio (move) - e.g., "+0.0152% (+0.0152%)" or "+1.0002 (+0.0002)"
             norm_column_value = f"{norm_display} ({norm_move_display})"
             
+            # Get current DCA step value
+            current_dca_step = env._get_dca_step_value()
+            
+            # Format DCA step value based on normalization method
+            if norm_method.value == "percentage_changes":
+                dca_display = f"{current_dca_step*100:.4f}%"
+            elif norm_method.value == "log_returns":
+                dca_display = f"{current_dca_step*100:.4f}%"
+            elif norm_method.value == "z-score":
+                dca_display = f"{current_dca_step:.2f}σ"
+            elif norm_method.value == "price_ratio":
+                dca_display = f"{current_dca_step*100:.2f}%"
+            else:
+                dca_display = f"{current_dca_step:.6f}"
+            
             log_file.write(
                 f"{len(actions)-1:<6} ${price:<9.2f} "
                 f"{norm_column_value:<20} "
+                f"{dca_display:<12} "
                 f"{action_name:<7} "
                 f"{flag:<7} "
                 f"{qty:>+10.4f} "
@@ -408,7 +490,14 @@ def main():
         log_file.write("=" * 90 + "\n")
         log_file.write("TRADING REPORT\n")
         log_file.write("=" * 90 + "\n\n")
-        actions, portfolio_values, trades, force_sell_index, total_fees = run_strategy(env_test, model, log_file=log_file)
+        actions, portfolio_values, trades, force_sell_index, total_fees = run_strategy(
+            env=env_test,
+            model=model,
+            log_file=log_file,
+            force_initial_buys=True,  # Enable forced buys during evaluation
+            forced_buy_delay=curriculum_forced_buy_delay,
+            forced_buy_size=curriculum_forced_buy_size
+        )
         
         # Calculate metrics
         metrics = calculate_metrics(portfolio_values, initial_capital)
