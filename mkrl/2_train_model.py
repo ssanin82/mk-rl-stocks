@@ -19,6 +19,7 @@ if __name__ == "__main__":
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from mkrl.env import TradingEnv
+from mkrl.utils import format_time
 from mkrl.settings import (
     initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
     training_episodes, default_prices_file, default_model_file, train_split_ratio
@@ -219,7 +220,7 @@ def main():
         print(f"  Run 'tensorboard --logdir ./tensorboard_logs' to view visual progress")
     
     training_time = time.time() - ts
-    print(f"\n✓ Training complete! Took {round(training_time, 3)} seconds")
+    print(f"\n✓ Training complete! Took {format_time(training_time)}")
     
     # Save model
     model_path = Path(args.model)
@@ -274,7 +275,7 @@ def main():
     <div class="container">
         <h1>✓ Model Training Complete!</h1>
         <div class="message">Training time:</div>
-        <div class="time">{round(training_time, 3)} seconds</div>
+        <div class="time">{format_time(training_time)}</div>
         <div class="details">
             <p>Model saved to: <code>{model_path.name}</code></p>
             <p>Training data: {len(train_prices)} prices</p>
