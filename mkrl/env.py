@@ -140,17 +140,31 @@ class TradingEnv(gym.Env):
             adjusted_step = step_value
         
         # Calculate normalized price drop (negative means price is below entry)
+        # norm_price_diff = current_norm_price - entry_norm_price
+        # For DCA to trigger, we need: current < entry, so norm_price_diff < 0
+        # price_drop should be negative when price drops below entry
         if self.normalization_method in [NormalizationMethod.PERCENTAGE_CHANGES, NormalizationMethod.LOG_RETURNS]:
-            # For these, norm_price_diff is already the difference
-            price_drop = -norm_price_diff  # Negative means drop
+            # For these, norm_price_diff is already the difference (current - entry)
+            # Negative norm_price_diff means price dropped, so price_drop should be negative
+            price_drop = -norm_price_diff  # Negative means drop (correct)
         elif self.normalization_method == NormalizationMethod.Z_SCORE:
-            # For z-score, difference from entry
-            price_drop = self.normalized_entry_price - norm_price_diff  # How many std devs below entry
+            # For z-score, norm_price_diff = current - entry
+            # price_drop = entry - current = -(current - entry) = -norm_price_diff
+            price_drop = -norm_price_diff  # Negative means drop
         elif self.normalization_method == NormalizationMethod.PRICE_RATIO:
-            # For price_ratio, drop is entry - current (both are ratios)
-            price_drop = self.normalized_entry_price - norm_price_diff
+            # For price_ratio, norm_price_diff = current - entry
+            # price_drop = entry - current = -(current - entry) = -norm_price_diff
+            price_drop = -norm_price_diff  # Negative means drop
         
         # Check multi-tier thresholds
+        # price_drop is negative when price drops below entry
+        # tier_threshold is negative (e.g., -0.0005 for tier 1)
+        # DCA triggers when price_drop <= tier_threshold (price dropped enough)
+        # But we also need to ensure price_drop is actually negative (price dropped)
+        if price_drop >= 0:
+            # Price hasn't dropped (current >= entry), don't trigger DCA
+            return 0, 0.0
+        
         for tier in range(1, dca_max_tiers + 1):
             tier_threshold = -adjusted_step * tier  # Negative threshold (drop)
             if price_drop <= tier_threshold:
@@ -916,7 +930,8 @@ class TradingEnv(gym.Env):
                 original_entry = self.normalized_entry_price
                 self.normalized_entry_price = entry_norm_price
                 # Calculate which tier is triggered
-                tier, tier_threshold = self._calculate_dca_tier(current_norm_price)
+                # Pass norm_price_diff (current - entry), not current_norm_price
+                tier, tier_threshold = self._calculate_dca_tier(norm_price_diff)
                 # Restore original
                 self.normalized_entry_price = original_entry
                 

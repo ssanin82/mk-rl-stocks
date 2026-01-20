@@ -59,7 +59,7 @@
     "lot_size": 0.001,
     "normalization_method": "log_returns",
     "percentage_changes_step": 0.001,
-    "log_returns_step": 0.0005,
+    "log_returns_step": 0.01,
     "z-score_step": 1.1,
     "price_ratio_step": 0.01,
     "dca_volatility_window": 20,

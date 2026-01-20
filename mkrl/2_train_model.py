@@ -314,242 +314,219 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
     print("(This may take several minutes...)\n")
     ts = time.time()
     
-    # Create log file for training progress (with config name)
-    log_file_path = Path(f"training_progress_{config_name}.log")
-    with open(log_file_path, 'w', encoding='utf-8') as log_file:
-        log_file.write(f"Training Progress Log - Config: {config_name}\n")
-        log_file.write(f"{'='*80}\n")
-        log_file.write(f"Total timesteps: {training_timesteps:,}\n")
-        log_file.write(f"Episodes: {episodes}\n")
-        log_file.write(f"Training prices: {len(train_prices)}\n")
-        log_file.write(f"Settings file: {settings_file}\n")
-        log_file.write(f"{'='*80}\n\n")
+    # Create progress callback (console output only, no file)
+    progress_callback = TrainingProgressCallback(
+        log_file=None,  # No file logging
+        total_timesteps=training_timesteps,
+        verbose=1
+    )
+    
+    # Create model (with optional TensorBoard logging if available)
+    try:
+        import tensorboard
+        tensorboard_available = True
+        tensorboard_log_dir = Path(f"./tensorboard_logs_{config_name}/")
+    except ImportError:
+        tensorboard_available = False
+        tensorboard_log_dir = None
+    
+    # Choose policy based on settings
+    # Note: For LSTM policies, you would need sb3-contrib or custom feature extractors
+    # The price_history_window already provides temporal context to the MLP
+    
+    # Optimize network size for speed if enabled
+    if optimize_network_size:
+        # Smaller network = faster training (with minimal performance impact for this problem)
+        # Original: [256, 256, 128] -> Optimized: [128, 128] for faster training
+        if cuda_available:
+            # GPU can handle larger networks, but still optimize for speed
+            net_arch = dict(pi=[128, 128], vf=[128, 128])
+            print("  Network: Optimized [128, 128] (GPU-optimized)")
+        else:
+            # CPU benefits more from smaller networks
+            net_arch = dict(pi=[64, 64], vf=[64, 64])
+            print("  Network: Optimized [64, 64] (CPU-optimized)")
+    else:
+        # Use larger network (original)
+        net_arch = dict(pi=[256, 256, 128], vf=[256, 256, 128])
+        print("  Network: Standard [256, 256, 128]")
+    
+    if use_lstm_policy:
+        # For LSTM, we'll use a deeper MLP that can learn patterns from price history
+        # The price history is already included in observations via price_history_window
+        print("Note: Using enhanced MLP with price history (LSTM requires sb3-contrib)")
+        policy_kwargs = {"net_arch": net_arch}
+        policy_name = "MlpPolicy"
+    else:
+        # Enhanced MLP policy with price history
+        policy_kwargs = {"net_arch": net_arch}
+        policy_name = "MlpPolicy"
+    
+    # Optimize batch size for speed if enabled
+    if optimize_batch_size:
+        if use_vecenv and n_envs > 1:
+            # With parallel environments, use larger batches
+            if cuda_available:
+                batch_size = 128  # GPU can handle larger batches
+                n_steps = 2048 * n_envs  # Scale steps with number of envs
+            else:
+                batch_size = 64  # CPU: moderate batch size
+                n_steps = 1024 * n_envs  # Scale steps with number of envs
+        else:
+            # Single environment
+            if cuda_available:
+                batch_size = 64
+                n_steps = 2048
+            else:
+                batch_size = 32  # CPU: smaller batches for faster updates
+                n_steps = 1024
+        print(f"  Batch size: {batch_size} (optimized)")
+        print(f"  N-steps: {n_steps} (optimized)")
+    else:
+        batch_size = 64
+        n_steps = 2048
+        print(f"  Batch size: {batch_size} (standard)")
+        print(f"  N-steps: {n_steps} (standard)")
+    
+    model_kwargs = {
+        "policy": policy_name,
+        "policy_kwargs": policy_kwargs,
+        "env": env_train,
+        "verbose": 1,
+        "learning_rate": 3e-4,
+        "n_steps": n_steps,
+        "batch_size": batch_size,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "ent_coef": ent_coef,  # Load from settings (default 0.2)
+        "vf_coef": 0.5,
+        "max_grad_norm": 0.5,
+        "device": final_device,  # Explicitly set device
+    }
+    
+    if tensorboard_available:
+        model_kwargs["tensorboard_log"] = str(tensorboard_log_dir)
+    
+    print(f"\n  Device: {final_device}")
+    print(f"  Policy: {policy_name}")
+    print()
+    
+    model = PPO(**model_kwargs)
+    
+    # Curriculum learning: Phase 1 with forced initial buys, Phase 2 free choice
+    phase1_timesteps = int(training_timesteps * curriculum_phase1_episodes) if curriculum_enabled else 0
+    phase2_timesteps = training_timesteps - phase1_timesteps
+    
+    if curriculum_enabled and phase1_timesteps > 0:
+        print(f"\n📚 Curriculum Learning Phase 1: {phase1_timesteps:,} timesteps (forced initial buys)")
+        print(f"   Model will be forced to buy after {curriculum_forced_buy_delay} steps if no trade occurred")
         
-        # Create progress callback
-        progress_callback = TrainingProgressCallback(
-            log_file=log_file,
-            total_timesteps=training_timesteps,
-            verbose=1
+        # Phase 1: Train with forced initial buys
+        class ForcedBuyCallback(BaseCallback):
+            def __init__(self, env, forced_buy_delay, forced_buy_size, verbose=0):
+                super().__init__(verbose)
+                self.env = env
+                self.forced_buy_delay = forced_buy_delay
+                self.forced_buy_size = forced_buy_size
+                self.step_count = 0
+                # Check if we're using VecEnv
+                self.is_vecenv = isinstance(self.env, (DummyVecEnv, SubprocVecEnv))
+                self.is_subproc = isinstance(self.env, SubprocVecEnv)
+            
+            def _force_buy_in_env(self, env_unwrapped):
+                """Helper method to force a buy in a single environment."""
+                if (not env_unwrapped.has_ever_traded and env_unwrapped.holdings == 0):
+                    # Force a buy action
+                    price = env_unwrapped.prices[env_unwrapped.current_step]
+                    shares = max(self.forced_buy_size, env_unwrapped.min_size)
+                    shares = env_unwrapped._round_to_lot_size(shares)
+                    notional = shares * price
+                    fee = notional * env_unwrapped.trading_fee_rate
+                    total_cost = notional + fee
+                    
+                    if env_unwrapped.cash >= total_cost and notional >= env_unwrapped.min_notional:
+                        env_unwrapped.holdings += shares
+                        env_unwrapped.cash -= total_cost
+                        env_unwrapped.cash = max(0, env_unwrapped.cash)
+                        cost_this_trade = notional
+                        env_unwrapped.total_cost_basis += cost_this_trade
+                        if env_unwrapped.holdings > 0:
+                            env_unwrapped.avg_entry_price = env_unwrapped.total_cost_basis / env_unwrapped.holdings
+                            current_norm_price = env_unwrapped.normalized_prices[env_unwrapped.current_step]
+                            env_unwrapped.normalized_entry_price = current_norm_price
+                        env_unwrapped.has_ever_traded = True
+                        env_unwrapped.last_trade_step = env_unwrapped.current_step
+                        env_unwrapped.steps_since_last_trade = 0
+                        return True
+                return False
+            
+            def _on_step(self) -> bool:
+                self.step_count += 1
+                
+                # Only force buys periodically
+                if self.step_count % self.forced_buy_delay != 0:
+                    return True
+                
+                # Check if we should force a buy
+                if self.is_vecenv:
+                    # For VecEnv, need to access individual environments
+                    if isinstance(self.env, DummyVecEnv):
+                        # DummyVecEnv: direct access to envs list
+                        for env_idx in range(self.env.num_envs):
+                            env_unwrapped = self.env.envs[env_idx].unwrapped if hasattr(self.env.envs[env_idx], 'unwrapped') else self.env.envs[env_idx]
+                            self._force_buy_in_env(env_unwrapped)
+                    else:
+                        # SubprocVecEnv: Skip forced buys (not currently supported with SubprocVecEnv)
+                        # Since we now always use DummyVecEnv, this branch shouldn't be reached
+                        # But keeping it as a fallback
+                        pass
+                else:
+                    # Single environment
+                    env_unwrapped = self.env.unwrapped if hasattr(self.env, 'unwrapped') else self.env
+                    self._force_buy_in_env(env_unwrapped)
+                
+                return True
+        
+        forced_buy_callback = ForcedBuyCallback(
+            env_train, 
+            curriculum_forced_buy_delay, 
+            curriculum_forced_buy_size
         )
         
-        # Create model (with optional TensorBoard logging if available)
-        try:
-            import tensorboard
-            tensorboard_available = True
-            tensorboard_log_dir = Path(f"./tensorboard_logs_{config_name}/")
-        except ImportError:
-            tensorboard_available = False
-            tensorboard_log_dir = None
+        phase1_callbacks = [progress_callback, forced_buy_callback]
+        model.learn(
+            total_timesteps=phase1_timesteps,
+            callback=phase1_callbacks
+        )
         
-        # Choose policy based on settings
-        # Note: For LSTM policies, you would need sb3-contrib or custom feature extractors
-        # The price_history_window already provides temporal context to the MLP
-        
-        # Optimize network size for speed if enabled
-        if optimize_network_size:
-            # Smaller network = faster training (with minimal performance impact for this problem)
-            # Original: [256, 256, 128] -> Optimized: [128, 128] for faster training
-            if cuda_available:
-                # GPU can handle larger networks, but still optimize for speed
-                net_arch = dict(pi=[128, 128], vf=[128, 128])
-                print("  Network: Optimized [128, 128] (GPU-optimized)")
-            else:
-                # CPU benefits more from smaller networks
-                net_arch = dict(pi=[64, 64], vf=[64, 64])
-                print("  Network: Optimized [64, 64] (CPU-optimized)")
-        else:
-            # Use larger network (original)
-            net_arch = dict(pi=[256, 256, 128], vf=[256, 256, 128])
-            print("  Network: Standard [256, 256, 128]")
-        
-        if use_lstm_policy:
-            # For LSTM, we'll use a deeper MLP that can learn patterns from price history
-            # The price history is already included in observations via price_history_window
-            print("Note: Using enhanced MLP with price history (LSTM requires sb3-contrib)")
-            policy_kwargs = {"net_arch": net_arch}
-            policy_name = "MlpPolicy"
-        else:
-            # Enhanced MLP policy with price history
-            policy_kwargs = {"net_arch": net_arch}
-            policy_name = "MlpPolicy"
-        
-        # Optimize batch size for speed if enabled
-        if optimize_batch_size:
-            if use_vecenv and n_envs > 1:
-                # With parallel environments, use larger batches
-                if cuda_available:
-                    batch_size = 128  # GPU can handle larger batches
-                    n_steps = 2048 * n_envs  # Scale steps with number of envs
-                else:
-                    batch_size = 64  # CPU: moderate batch size
-                    n_steps = 1024 * n_envs  # Scale steps with number of envs
-            else:
-                # Single environment
-                if cuda_available:
-                    batch_size = 64
-                    n_steps = 2048
-                else:
-                    batch_size = 32  # CPU: smaller batches for faster updates
-                    n_steps = 1024
-            print(f"  Batch size: {batch_size} (optimized)")
-            print(f"  N-steps: {n_steps} (optimized)")
-        else:
-            batch_size = 64
-            n_steps = 2048
-            print(f"  Batch size: {batch_size} (standard)")
-            print(f"  N-steps: {n_steps} (standard)")
-        
-        model_kwargs = {
-            "policy": policy_name,
-            "policy_kwargs": policy_kwargs,
-            "env": env_train,
-            "verbose": 1,
-            "learning_rate": 3e-4,
-            "n_steps": n_steps,
-            "batch_size": batch_size,
-            "n_epochs": 10,
-            "gamma": 0.99,
-            "gae_lambda": 0.95,
-            "ent_coef": ent_coef,  # Load from settings (default 0.2)
-            "vf_coef": 0.5,
-            "max_grad_norm": 0.5,
-            "device": final_device,  # Explicitly set device
-        }
-        
-        if tensorboard_available:
-            model_kwargs["tensorboard_log"] = str(tensorboard_log_dir)
-        
-        print(f"\n  Device: {final_device}")
-        print(f"  Policy: {policy_name}")
-        print()
-        
-        model = PPO(**model_kwargs)
-        
-        # Curriculum learning: Phase 1 with forced initial buys, Phase 2 free choice
-        phase1_timesteps = int(training_timesteps * curriculum_phase1_episodes) if curriculum_enabled else 0
-        phase2_timesteps = training_timesteps - phase1_timesteps
-        
-        if curriculum_enabled and phase1_timesteps > 0:
-            print(f"\n📚 Curriculum Learning Phase 1: {phase1_timesteps:,} timesteps (forced initial buys)")
-            print(f"   Model will be forced to buy after {curriculum_forced_buy_delay} steps if no trade occurred")
-            
-            # Phase 1: Train with forced initial buys
-            class ForcedBuyCallback(BaseCallback):
-                def __init__(self, env, forced_buy_delay, forced_buy_size, verbose=0):
-                    super().__init__(verbose)
-                    self.env = env
-                    self.forced_buy_delay = forced_buy_delay
-                    self.forced_buy_size = forced_buy_size
-                    self.step_count = 0
-                    # Check if we're using VecEnv
-                    self.is_vecenv = isinstance(self.env, (DummyVecEnv, SubprocVecEnv))
-                    self.is_subproc = isinstance(self.env, SubprocVecEnv)
-                
-                def _force_buy_in_env(self, env_unwrapped):
-                    """Helper method to force a buy in a single environment."""
-                    if (not env_unwrapped.has_ever_traded and env_unwrapped.holdings == 0):
-                        # Force a buy action
-                        price = env_unwrapped.prices[env_unwrapped.current_step]
-                        shares = max(self.forced_buy_size, env_unwrapped.min_size)
-                        shares = env_unwrapped._round_to_lot_size(shares)
-                        notional = shares * price
-                        fee = notional * env_unwrapped.trading_fee_rate
-                        total_cost = notional + fee
-                        
-                        if env_unwrapped.cash >= total_cost and notional >= env_unwrapped.min_notional:
-                            env_unwrapped.holdings += shares
-                            env_unwrapped.cash -= total_cost
-                            env_unwrapped.cash = max(0, env_unwrapped.cash)
-                            cost_this_trade = notional
-                            env_unwrapped.total_cost_basis += cost_this_trade
-                            if env_unwrapped.holdings > 0:
-                                env_unwrapped.avg_entry_price = env_unwrapped.total_cost_basis / env_unwrapped.holdings
-                                current_norm_price = env_unwrapped.normalized_prices[env_unwrapped.current_step]
-                                env_unwrapped.normalized_entry_price = current_norm_price
-                            env_unwrapped.has_ever_traded = True
-                            env_unwrapped.last_trade_step = env_unwrapped.current_step
-                            env_unwrapped.steps_since_last_trade = 0
-                            return True
-                    return False
-                
-                def _on_step(self) -> bool:
-                    self.step_count += 1
-                    
-                    # Only force buys periodically
-                    if self.step_count % self.forced_buy_delay != 0:
-                        return True
-                    
-                    # Check if we should force a buy
-                    if self.is_vecenv:
-                        # For VecEnv, need to access individual environments
-                        if isinstance(self.env, DummyVecEnv):
-                            # DummyVecEnv: direct access to envs list
-                            for env_idx in range(self.env.num_envs):
-                                env_unwrapped = self.env.envs[env_idx].unwrapped if hasattr(self.env.envs[env_idx], 'unwrapped') else self.env.envs[env_idx]
-                                self._force_buy_in_env(env_unwrapped)
-                        else:
-                            # SubprocVecEnv: Skip forced buys (not currently supported with SubprocVecEnv)
-                            # Since we now always use DummyVecEnv, this branch shouldn't be reached
-                            # But keeping it as a fallback
-                            pass
-                    else:
-                        # Single environment
-                        env_unwrapped = self.env.unwrapped if hasattr(self.env, 'unwrapped') else self.env
-                        self._force_buy_in_env(env_unwrapped)
-                    
-                    return True
-            
-            forced_buy_callback = ForcedBuyCallback(
-                env_train, 
-                curriculum_forced_buy_delay, 
-                curriculum_forced_buy_size
-            )
-            
-            phase1_callbacks = [progress_callback, forced_buy_callback]
+        if phase2_timesteps > 0:
+            print(f"\n📚 Curriculum Learning Phase 2: {phase2_timesteps:,} timesteps (free choice)")
+            # Phase 2: Continue training with free choice
             model.learn(
-                total_timesteps=phase1_timesteps,
-                callback=phase1_callbacks
+                total_timesteps=phase2_timesteps,
+                callback=progress_callback,
+                reset_num_timesteps=False  # Continue from Phase 1
             )
-            
-            if phase2_timesteps > 0:
-                print(f"\n📚 Curriculum Learning Phase 2: {phase2_timesteps:,} timesteps (free choice)")
-                # Phase 2: Continue training with free choice
-                model.learn(
-                    total_timesteps=phase2_timesteps,
-                    callback=progress_callback,
-                    reset_num_timesteps=False  # Continue from Phase 1
-                )
-        else:
-            # Standard training without curriculum
-            model.learn(
-                total_timesteps=training_timesteps,
-                callback=progress_callback
-            )
+    else:
+        # Standard training without curriculum
+        model.learn(
+            total_timesteps=training_timesteps,
+            callback=progress_callback
+        )
     
-    print(f"✓ Training progress logged to {log_file_path.absolute()}")
     if tensorboard_available:
         tensorboard_log_path = Path(f"./tensorboard_logs_{config_name}/")
         print(f"✓ TensorBoard logs saved to {tensorboard_log_path}")
         print(f"  Run 'tensorboard --logdir {tensorboard_log_path}' to view visual progress")
     
     training_time = time.time() - ts
-    print(f"\n✓ Training complete for {config_name}! Took {format_time(training_time)}")
+    print(f"✓ Training complete for {config_name}! Took {format_time(training_time)}")
     
     # Save model with config name
     model_path = Path(f"model_{config_name}.zip")
     model.save(str(model_path))
     print(f"✓ Model saved to {model_path.absolute()}")
-    
-    # Create and open completion page in browser
-    html_path = create_training_complete_html(
-        training_time=training_time,
-        model_path=model_path,
-        train_prices_count=len(train_prices),
-        episodes=episodes,
-        training_timesteps=training_timesteps
-    )
-    print(f"\nOpening completion page in browser...")
-    webbrowser.open(html_path.as_uri())
     
     return config_name, model_path, training_time
 
@@ -589,6 +566,7 @@ def main():
     split = args.split if args.split is not None else train_split_ratio
     
     # Train models for each settings file
+    overall_start_time = time.time()
     results = []
     for i, settings_file in enumerate(settings_files, 1):
         print(f"\n{'#'*70}")
@@ -608,13 +586,31 @@ def main():
             traceback.print_exc()
             continue
     
-    # Summary
+    # Overall summary (only report once after all models)
+    overall_time = time.time() - overall_start_time
     print(f"\n{'='*70}")
-    print("TRAINING SUMMARY")
+    print("TRAINING COMPLETE - SUMMARY")
     print(f"{'='*70}")
+    print(f"Total models trained: {len(results)}")
+    print(f"Overall time: {format_time(overall_time)}")
+    print(f"\nModels:")
     for config_name, model_path, training_time in results:
-        print(f"  {config_name}: {model_path} ({format_time(training_time)})")
+        print(f"  • {config_name}: {model_path.name} ({format_time(training_time)})")
     print(f"{'='*70}\n")
+    
+    # Create and open single completion page in browser (only if models were trained)
+    if results:
+        # Use the first model's details for the HTML page (or create a summary page)
+        first_config_name, first_model_path, _ = results[0]
+        html_path = create_training_complete_html(
+            training_time=overall_time,
+            model_path=first_model_path,
+            train_prices_count=0,  # Not applicable for multi-model summary
+            episodes=episodes,
+            training_timesteps=0  # Not applicable for multi-model summary
+        )
+        print(f"Opening completion page in browser...")
+        webbrowser.open(html_path.as_uri())
 
 
 if __name__ == "__main__":

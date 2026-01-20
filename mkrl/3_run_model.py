@@ -258,7 +258,13 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
     Returns:
         Tuple of (actions, portfolio_values, trades, force_sell_index, total_fees)
     """
-    obs = env.reset()
+    # Gymnasium reset() returns (obs, info), handle both cases for compatibility
+    reset_result = env.reset()
+    if isinstance(reset_result, tuple):
+        obs, reset_info = reset_result
+    else:
+        obs = reset_result
+        reset_info = {}
     done = False
     actions = []
     portfolio_values = []
@@ -482,7 +488,7 @@ def run_strategy(env, model, log_file=None, force_initial_buys=True, forced_buy_
             note = ""  # Explanation of why action was taken
             
             # Check if forced buy executed (highest priority for logging)
-            if forced_buy_executed_this_step:
+            if forced_buy_executed:
                 action_name = "BUY"  # Forced buy should show as BUY
                 flag = "FORCE"
                 # Calculate qty from holdings change (forced buy shares)
