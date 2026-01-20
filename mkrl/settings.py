@@ -15,15 +15,125 @@ _settings_data: Optional[Dict[str, Dict[str, Any]]] = None
 _settings_path: Optional[Path] = None
 _config_name: Optional[str] = None
 
+
+def load_settings_with_inheritance(settings_file: str) -> Dict[str, Any]:
+    """
+    Load settings from a JSON file with inheritance support.
+    
+    If a settings file contains an "include" field pointing to another settings file,
+    that file is loaded first, and then values from the current file override the
+    included settings (deep merge).
+    
+    This allows for layered configuration where base settings can be inherited
+    and selectively overridden.
+    
+    Args:
+        settings_file: Path to the settings file to load
+    
+    Returns:
+        Dictionary containing merged settings (with "include" key removed)
+    
+    Example:
+        base.json:
+        {
+            "config_name": "base",
+            "common": {"param1": "abc", "param2": "def"},
+            "btc": {"param3": "ghi"}
+        }
+        
+        override.json:
+        {
+            "include": "base.json",
+            "config_name": "override",
+            "common": {"param1": "xyz"}
+        }
+        
+        Result:
+        {
+            "config_name": "override",
+            "common": {"param1": "xyz", "param2": "def"},
+            "btc": {"param3": "ghi"}
+        }
+    """
+    settings_path = Path(settings_file)
+    if not settings_path.exists():
+        raise FileNotFoundError(f"Settings file not found: {settings_path}")
+    
+    # Load the current settings file
+    with open(settings_path, 'r', encoding='utf-8') as f:
+        current_settings = json.load(f)
+    
+    # Check if this file includes another settings file
+    if "include" in current_settings:
+        include_file = current_settings["include"]
+        
+        # Resolve include path relative to current file's directory
+        if not Path(include_file).is_absolute():
+            include_path = settings_path.parent / include_file
+        else:
+            include_path = Path(include_file)
+        
+        if not include_path.exists():
+            raise FileNotFoundError(f"Included settings file not found: {include_path}")
+        
+        # Recursively load the included settings (supports nested includes)
+        base_settings = load_settings_with_inheritance(str(include_path))
+        
+        # Deep merge: base settings first, then override with current settings
+        merged_settings = _deep_merge_dicts(base_settings, current_settings)
+        
+        # Remove the "include" key from the final result
+        merged_settings.pop("include", None)
+        
+        return merged_settings
+    else:
+        # No inheritance, return as-is
+        return current_settings
+
+
+def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deep merge two dictionaries.
+    
+    Values from `override` take precedence over `base`. For nested dictionaries,
+    the merge is recursive. For lists and other types, the override value replaces
+    the base value entirely.
+    
+    Args:
+        base: Base dictionary (values are defaults)
+        override: Override dictionary (values take precedence)
+    
+    Returns:
+        Merged dictionary
+    """
+    result = base.copy()
+    
+    for key, override_value in override.items():
+        if key == "include":
+            # Skip the "include" key during merge
+            continue
+        
+        if key in result and isinstance(result[key], dict) and isinstance(override_value, dict):
+            # Recursively merge nested dictionaries
+            result[key] = _deep_merge_dicts(result[key], override_value)
+        else:
+            # Override with the new value (or add if key doesn't exist)
+            result[key] = override_value
+    
+    return result
+
 def load_settings(settings_file: Optional[str] = None) -> Dict[str, Any]:
     """
-    Load settings from a JSON file.
+    Load settings from a JSON file with inheritance support.
+    
+    If a settings file contains an "include" field, it will load the included
+    settings first and merge them with the current file's settings.
     
     Args:
         settings_file: Path to settings file. If None, uses default settings.json
     
     Returns:
-        Dictionary containing all settings data
+        Dictionary containing all settings data (merged if inheritance is used)
     """
     global _settings_data, _settings_path, _config_name
     
@@ -36,8 +146,8 @@ def load_settings(settings_file: Optional[str] = None) -> Dict[str, Any]:
         if not settings_path.exists():
             raise FileNotFoundError(f"Settings file not found: {settings_path}")
     
-    with open(settings_path, 'r') as f:
-        _settings_data = json.load(f)
+    # Use the inheritance-aware loader
+    _settings_data = load_settings_with_inheritance(str(settings_path))
     
     _settings_path = settings_path
     _config_name = _settings_data.get("config_name", "base")

@@ -1,42 +1,12 @@
 {
+  "include": "settings.json",
   "config_name": "half_aggressive",
   "common": {
-    "n_price_points": 100000,
-    "default_prices_file": "btc_usdt_1m_prices.txt",
-    "training_episodes": 50,
-    "train_split_ratio": 0.9,
-    "default_model_file": "trading_model.zip",
-    "price_history_window": 10,
-    "use_lstm_policy": false,
     "ent_coef": 0.15,
-    "training_optimization": {
-      "n_envs": 4,
-      "use_vecenv": true,
-      "device": "auto",
-      "optimize_batch_size": true,
-      "optimize_network_size": true
-    },
-    "curriculum_learning": {
-      "enabled": true,
-      "phase1_episodes": 0.3,
-      "forced_initial_buy_delay": 10,
-      "forced_initial_buy_size": 0.001
-    },
     "reward_shaping": {
-      "incremental_reward_scale": 5000,
       "trade_execution_reward": 0.25,
-      "momentum_reward_scale": 0.3,
-      "hold_profit_reward_scale": 0.02,
-      "entry_quality_reward_scale": 0.5,
-      "end_episode_reward_scale": 10,
-      "sharpe_reward_scale": 0.1,
-      "drawdown_penalty_scale": 2.0,
-      "position_sizing_reward_scale": 0.01,
-      "pnl_penalty_scale": 10,
       "entry_incentive_reward": 2.5,
-      "invalid_sell_penalty": -1000.0,
       "no_position_hold_penalty": -0.25,
-      "has_position_reward": 0.02,
       "full_cash_no_position_penalty": -0.5,
       "steps_since_trade_penalty_scale": 0.025,
       "pre_trade_buy_incentive": 1.0,
@@ -46,27 +16,5 @@
       "aggressive_trading_bonus": 0.5,
       "risk_taking_multiplier": 1.0
     }
-  },
-  "btc": {
-    "initial_capital": 10000,
-    "min_notional": 50.0,
-    "min_size": 0.001,
-    "trading_fee_rate": 0.0001,
-    "profit_threshold": 0.002,
-    "partial_sell_ratio": 0.002,
-    "dca_threshold": 0.002,
-    "dca_ratio": 0.02,
-    "lot_size": 0.001,
-    "normalization_method": "log_returns",
-    "percentage_changes_step": 0.001,
-    "log_returns_step": 0.01,
-    "z-score_step": 1.1,
-    "price_ratio_step": 0.01,
-    "dca_volatility_window": 20,
-    "dca_max_tiers": 3,
-    "dca_base_ratio": 0.02,
-    "dca_tier_multiplier": 1.5,
-    "dca_virtual_entry_enabled": true,
-    "dca_virtual_entry_lookback": 50
   }
 }
