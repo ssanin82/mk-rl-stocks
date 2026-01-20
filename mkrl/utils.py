@@ -138,8 +138,19 @@ def normalize_prices(prices, method):
         sys.exit(1)
 
 
-def calculate_metrics(portfolio_values, initial_capital):
-    """Calculate performance metrics from portfolio values."""
+def calculate_metrics(portfolio_values, initial_capital, n_periods=None, data_frequency_minutes=1):
+    """
+    Calculate performance metrics from portfolio values.
+    
+    Args:
+        portfolio_values: Array of portfolio values over time
+        initial_capital: Starting capital
+        n_periods: Number of data points (for annualization). If None, uses len(portfolio_values)
+        data_frequency_minutes: Frequency of data points in minutes (default: 1 for 1-minute data)
+    
+    Returns:
+        Dictionary of performance metrics including Sharpe and Calmar ratios
+    """
     final_capital = portfolio_values[-1]
     total_return = ((final_capital - initial_capital) / initial_capital) * 100
     
@@ -154,6 +165,31 @@ def calculate_metrics(portfolio_values, initial_capital):
     
     returns = np.diff(portfolio_values) / portfolio_values[:-1]
     volatility = np.std(returns) * 100
+    mean_return = np.mean(returns) * 100  # Mean return as percentage
+    
+    # Calculate Sharpe Ratio (assuming risk-free rate = 0 for crypto)
+    # Sharpe = Mean Return / Volatility
+    sharpe_ratio = mean_return / volatility if volatility > 0 else 0.0
+    
+    # Calculate Calmar Ratio (Annualized Return / Max Drawdown)
+    # Assumes data points are per minute
+    if n_periods is None:
+        n_periods = len(portfolio_values)
+    
+    # Annualize return: minutes per year = 365 * 24 * 60 = 525,600
+    minutes_per_year = 365 * 24 * 60
+    periods_per_year = minutes_per_year / data_frequency_minutes
+    
+    # Annualized return calculation
+    # For small returns: annualized ≈ total_return * (periods_per_year / n_periods)
+    # For larger returns: annualized = (1 + total_return/100)^(periods_per_year / n_periods) - 1
+    if abs(total_return) < 50:  # Use linear approximation for small returns
+        annualized_return = total_return * (periods_per_year / n_periods)
+    else:  # Use compounding for larger returns
+        annualized_return = ((1 + total_return / 100) ** (periods_per_year / n_periods) - 1) * 100
+    
+    # Calmar Ratio = Annualized Return / Max Drawdown (as decimal)
+    calmar_ratio = annualized_return / max_dd if max_dd > 0 else 0.0
     
     return {
         'initial_capital': initial_capital,
@@ -161,5 +197,10 @@ def calculate_metrics(portfolio_values, initial_capital):
         'total_return': total_return,
         'max_drawdown': max_dd,
         'volatility': volatility,
-        'total_pnl': final_capital - initial_capital
+        'total_pnl': final_capital - initial_capital,
+        'sharpe_ratio': sharpe_ratio,
+        'calmar_ratio': calmar_ratio,
+        'annualized_return': annualized_return,
+        'n_periods': n_periods,
+        'data_frequency_minutes': data_frequency_minutes
     }

@@ -92,9 +92,14 @@ The `TradingEnv` is a custom Gymnasium environment with:
 
 - **Initial/Final Capital**: Starting and ending portfolio value
 - **Total P&L**: Profit and Loss in absolute terms
-- **Total Return**: Percentage gain/loss
+- **Total Return**: Percentage gain/loss for the test period
+- **Annualized Return**: Total return annualized (assumes 1-minute data frequency)
 - **Max Drawdown**: Maximum peak-to-trough decline
 - **Volatility**: Standard deviation of returns
+- **Sharpe Ratio**: Risk-adjusted return metric (Mean Return / Volatility, risk-free rate = 0)
+- **Calmar Ratio**: Risk-adjusted return metric (Annualized Return / Max Drawdown)
+
+**Note on Time Period**: Performance metrics assume price data points are 1-minute intervals. The Calmar ratio calculation annualizes returns based on this assumption (525,600 minutes per year). If your data uses a different frequency, the annualized metrics will need adjustment.
 
 ## Project Structure
 

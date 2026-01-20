@@ -165,21 +165,27 @@ def run_model_for_config(model_file: str, prices_file: str, split: float):
             forced_buy_delay=curriculum_forced_buy_delay,
             forced_buy_size=curriculum_forced_buy_size
         )
-        
-        # Calculate metrics
-        metrics = calculate_metrics(portfolio_values, initial_capital)
-        
+    
+    # Calculate metrics (assume 1-minute data frequency) - outside file context
+    metrics = calculate_metrics(portfolio_values, initial_capital, n_periods=len(test_prices), data_frequency_minutes=1)
+    
+    # Append metrics to log file
+    with open(log_filename, 'a', encoding='utf-8') as log_file:
         # Performance metrics
         log_file.write("\n" + "=" * 90 + "\n")
         log_file.write("PERFORMANCE METRICS\n")
         log_file.write("=" * 90 + "\n")
-        log_file.write(f"Initial Capital: ${metrics['initial_capital']:.2f}\n")
-        log_file.write(f"Final Capital:   ${metrics['final_capital']:.2f}\n")
-        log_file.write(f"Total P&L:       ${metrics['total_pnl']:.2f}\n")
-        log_file.write(f"Total Return:    {metrics['total_return']:.2f}%\n")
-        log_file.write(f"Total Fees:      ${total_fees:.2f}\n")
-        log_file.write(f"Max Drawdown:    {metrics['max_drawdown']:.2f}%\n")
-        log_file.write(f"Volatility:      {metrics['volatility']:.2f}%\n")
+        log_file.write(f"Initial Capital:     ${metrics['initial_capital']:.2f}\n")
+        log_file.write(f"Final Capital:       ${metrics['final_capital']:.2f}\n")
+        log_file.write(f"Total P&L:           ${metrics['total_pnl']:.2f}\n")
+        log_file.write(f"Total Return:        {metrics['total_return']:.2f}%\n")
+        log_file.write(f"Annualized Return:   {metrics['annualized_return']:.2f}%\n")
+        log_file.write(f"Total Fees:          ${total_fees:.2f}\n")
+        log_file.write(f"Max Drawdown:        {metrics['max_drawdown']:.2f}%\n")
+        log_file.write(f"Volatility:          {metrics['volatility']:.2f}%\n")
+        log_file.write(f"Sharpe Ratio:        {metrics['sharpe_ratio']:.4f} (risk-free rate = 0)\n")
+        log_file.write(f"Calmar Ratio:        {metrics['calmar_ratio']:.4f}\n")
+        log_file.write(f"\nNote: Metrics assume 1-minute data frequency ({metrics['n_periods']} periods = {metrics['n_periods']/60:.2f} hours)\n")
         
         # Summary statistics
         log_file.write("\n" + "=" * 90 + "\n")
@@ -202,14 +208,17 @@ def run_model_for_config(model_file: str, prices_file: str, split: float):
     execution_time = time.time() - ts
     print(f"✓ Execution complete! Took {round(execution_time, 3)} seconds")
     
-    # Calculate metrics (for console output)
-    metrics = calculate_metrics(portfolio_values, initial_capital)
-    
+    # Metrics already calculated above, reuse them
     print(f"\nResults for {config_name}:")
-    print(f"Initial Capital: ${metrics['initial_capital']:.2f}")
-    print(f"Final Capital: ${metrics['final_capital']:.2f}")
-    print(f"Total P&L: ${metrics['total_pnl']:.2f}")
-    print(f"Total Return: {metrics['total_return']:.2f}%")
+    print(f"Initial Capital:     ${metrics['initial_capital']:.2f}")
+    print(f"Final Capital:       ${metrics['final_capital']:.2f}")
+    print(f"Total P&L:           ${metrics['total_pnl']:.2f}")
+    print(f"Total Return:        {metrics['total_return']:.2f}%")
+    print(f"Annualized Return:   {metrics['annualized_return']:.2f}%")
+    print(f"Max Drawdown:        {metrics['max_drawdown']:.2f}%")
+    print(f"Volatility:          {metrics['volatility']:.2f}%")
+    print(f"Sharpe Ratio:        {metrics['sharpe_ratio']:.4f} (risk-free rate = 0)")
+    print(f"Calmar Ratio:        {metrics['calmar_ratio']:.4f}")
     
     # Print action statistics
     action_counts = {0: 0, 1: 0, 2: 0}

@@ -188,7 +188,7 @@ def create_static_html(prices, actions, portfolio_values, metrics, output_file='
         }}
         .metrics-row {{
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 20px;
             margin-top: 20px;
         }}
@@ -234,10 +234,22 @@ def create_static_html(prices, actions, portfolio_values, metrics, output_file='
                     <div class="metric-label">Volatility</div>
                     <div class="metric-value" style="color: #e0e0e0;">{metrics['volatility']:.2f}%</div>
                 </div>
-                <div class="metric-item">
-                    <div class="metric-label">Total Return</div>
-                    <div class="metric-value" style="color: {pnl_color};">{metrics['total_return']:.2f}%</div>
-                </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Total Return</div>
+                        <div class="metric-value" style="color: {pnl_color};">{metrics['total_return']:.2f}%</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Annualized Return</div>
+                        <div class="metric-value" style="color: {pnl_color};">{metrics['annualized_return']:.2f}%</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Sharpe Ratio</div>
+                        <div class="metric-value" style="color: #e0e0e0;">{metrics['sharpe_ratio']:.4f}</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Calmar Ratio</div>
+                        <div class="metric-value" style="color: #e0e0e0;">{metrics['calmar_ratio']:.4f}</div>
+                    </div>
             </div>
         </div>
         <div class="chart-container">
