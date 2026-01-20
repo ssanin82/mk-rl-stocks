@@ -233,15 +233,10 @@ def run_model_for_config(model_file: str, prices_file: str, split: float):
     
     # Create static HTML file (with config name in filename)
     print("\nGenerating static HTML report...")
-    html_file = create_static_html(test_prices, actions, portfolio_values, metrics, force_sell_index=force_sell_index)
-    # Rename HTML file to include config name
-    html_path_old = Path(html_file)
-    html_path_new = html_path_old.parent / f"trading_results_{config_name}.html"
-    if html_path_old.exists():
-        html_path_old.rename(html_path_new)
-        html_path = html_path_new.resolve()
-    else:
-        html_path = Path(html_file).resolve()
+    html_filename = f"trading_results_{config_name}.html"
+    html_file = create_static_html(test_prices, actions, portfolio_values, metrics, 
+                                    output_file=html_filename, force_sell_index=force_sell_index)
+    html_path = Path(html_file).resolve()
     
     print(f"HTML report saved to: {html_path}")
     print("Opening in browser...")
