@@ -1,5 +1,5 @@
 {
-  "include": "settings_quarter_aggressive.json",
+  "include": "quarter_aggressive.json",
   "config_name": "settings_ltsm_qa",
   "common": {
     "use_lstm_policy": true

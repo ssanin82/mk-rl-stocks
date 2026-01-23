@@ -1,0 +1,45 @@
+{
+  "include": "settings.json",
+  "config_name": "fast_conservative",
+  "common": {
+    "n_price_points": 10000,
+    "training_episodes": 10,
+    "training_optimization": {
+      "n_envs": 1,
+      "use_vecenv": false
+    },
+    "curriculum_learning": {
+      "enabled": false
+    },
+    "reward_shaping": {
+      "incremental_reward_scale": 10000,
+      "trade_execution_reward": -0.2,
+      "momentum_reward_scale": 1.0,
+      "hold_profit_reward_scale": 0.1,
+      "entry_quality_reward_scale": 2.0,
+      "end_episode_reward_scale": 20,
+      "sharpe_reward_scale": 0.2,
+      "drawdown_penalty_scale": 5.0,
+      "position_sizing_reward_scale": 0.02,
+      "pnl_penalty_scale": 20,
+      "entry_incentive_reward": 0.5,
+      "invalid_sell_penalty": -1000.0,
+      "no_position_hold_penalty": 0.0,
+      "has_position_reward": 0.05,
+      "full_cash_no_position_penalty": 0.0,
+      "steps_since_trade_penalty_scale": -0.01,
+      "pre_trade_buy_incentive": 0.0,
+      "exploration_bonus": 0.0,
+      "initial_training_fixed_reward": 0.0,
+      "no_trade_penalty_scale": -0.01,
+      "aggressive_trading_bonus": 0.0,
+      "risk_taking_multiplier": 0.3
+    }
+  },
+  "btc": {
+    "normalization_method": "log_returns",
+    "log_returns_step": 0.3,
+    "dca_threshold": 0.05,
+    "dca_ratio": 0.01
+  }
+}

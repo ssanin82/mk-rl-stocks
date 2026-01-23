@@ -119,15 +119,21 @@ def find_settings_file_for_config(config_name: str) -> str:
     if config_name == "base":
         return "config/settings.json"
     else:
-        # Try config/settings_<config_name>.json
-        settings_file = f"config/settings_{config_name}.json"
+        # Try config/<config_name>.json (new naming without "settings_" prefix)
+        settings_file = f"config/{config_name}.json"
         settings_path = Path(settings_file)
         if settings_path.exists():
             return str(settings_path)
-        else:
-            # Fallback to base settings
-            print(f"  ⚠ Warning: Settings file {settings_file} not found, using config/settings.json")
-            return "config/settings.json"
+        
+        # Fallback: Try config/settings_<config_name>.json (old naming for backward compatibility)
+        settings_file_old = f"config/settings_{config_name}.json"
+        settings_path_old = Path(settings_file_old)
+        if settings_path_old.exists():
+            return str(settings_path_old)
+        
+        # Final fallback to base settings
+        print(f"  ⚠ Warning: Settings file {settings_file} or {settings_file_old} not found, using config/settings.json")
+        return "config/settings.json"
 
 
 def run_model_for_config(model_file: str, prices_file: str, split: float):
