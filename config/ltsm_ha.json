@@ -1,7 +1,0 @@
-{
-  "include": "half_aggressive.json",
-  "config_name": "settings_ltsm_ha",
-  "common": {
-    "use_lstm_policy": true
-  }
-}

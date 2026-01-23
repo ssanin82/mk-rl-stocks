@@ -18,7 +18,9 @@ from alpharl.settings import (
     no_position_hold_penalty, has_position_reward, full_cash_no_position_penalty,
     steps_since_trade_penalty_scale, pre_trade_buy_incentive, exploration_bonus,
     initial_training_fixed_reward, no_trade_penalty_scale, aggressive_trading_bonus,
-    risk_taking_multiplier
+    risk_taking_multiplier, trading_cooldown_penalty_scale, trading_cooldown_steps,
+    sell_reward_bonus, end_position_penalty_scale,
+    sell_reward_bonus, end_position_penalty_scale
 )
 from alpharl.utils import normalize_prices, NormalizationMethod
 
@@ -185,7 +187,9 @@ class TradingEnv(gym.Env):
         steps_remaining_ratio,
         current_price,
         invalid_sell_attempted=False,
-        was_first_trade=False
+        was_first_trade=False,
+        steps_since_last_trade_before=0,
+        position_mgmt_action=None
     ):
         """
         Comprehensive reward shaping function to maximize P&L.
@@ -366,6 +370,10 @@ class TradingEnv(gym.Env):
             else:
                 # For first trade, also give base trade execution reward
                 reward += trade_execution_reward * risk_taking_multiplier
+            
+            # SELL REWARD BONUS: Encourage selling during the episode
+            if action == 2 and action_executed:  # SELL action executed
+                reward += sell_reward_bonus * risk_taking_multiplier
         
         # Also reward position management trades (they're rule-based and important)
         if position_mgmt_executed:
@@ -373,6 +381,16 @@ class TradingEnv(gym.Env):
             # Check if this was the first trade via position management
             if was_first_trade or (not self.has_ever_traded and self.holdings > 0):
                 reward += entry_incentive_reward * risk_taking_multiplier
+            # If position management executed a sell (profit-taking), give sell bonus
+            if position_mgmt_action and ("PROFIT_TAKE" in str(position_mgmt_action) or "Sold" in str(position_mgmt_action)):
+                reward += sell_reward_bonus * risk_taking_multiplier
+        
+        # COOLDOWN PENALTY: Penalize trading too frequently (discourages overtrading)
+        if action_executed and self.has_ever_traded and steps_since_last_trade_before < trading_cooldown_steps and steps_since_last_trade_before > 0:
+            # Penalize trading within cooldown period (scales with how recent the last trade was)
+            # Stronger penalty for trading immediately after previous trade
+            cooldown_penalty = -trading_cooldown_penalty_scale * (trading_cooldown_steps - steps_since_last_trade_before) / trading_cooldown_steps
+            reward += cooldown_penalty * risk_taking_multiplier
         
         # HEAVY PENALTY for invalid SELL attempts (trying to sell with 0 holdings) - AGGRESSIVE
         if invalid_sell_attempted:
@@ -565,8 +583,16 @@ class TradingEnv(gym.Env):
         if steps_remaining_ratio < 0.1 and self.holdings > 0:  # Last 10% of episode
             position_value = self.holdings * current_price
             position_ratio = position_value / self.initial_capital if self.initial_capital > 0 else 0
-            position_penalty = -5.0 * (1 - steps_remaining_ratio) * position_ratio
+            position_penalty = -end_position_penalty_scale * (1 - steps_remaining_ratio) * position_ratio
             reward += position_penalty
+        
+        # ADDITIONAL: Heavy penalty for ending episode with non-zero holdings
+        if done and self.holdings > 0:
+            position_value = self.holdings * current_price
+            position_ratio = position_value / self.initial_capital if self.initial_capital > 0 else 0
+            # Heavy penalty proportional to position size
+            end_position_penalty = -end_position_penalty_scale * 2.0 * position_ratio
+            reward += end_position_penalty
         
         return reward
         
@@ -724,6 +750,9 @@ class TradingEnv(gym.Env):
         
         # Track if this was the first trade
         was_first_trade = not self.has_ever_traded
+        
+        # Capture steps_since_last_trade BEFORE any trades reset it (for cooldown penalty)
+        steps_since_last_trade_before = self.steps_since_last_trade if self.has_ever_traded else 0
         
         # Track if position management rules triggered any trades (initialize early)
         position_mgmt_executed = False
@@ -1051,7 +1080,9 @@ class TradingEnv(gym.Env):
             steps_remaining_ratio=steps_remaining_ratio,
             current_price=current_price,
             invalid_sell_attempted=invalid_sell_attempted,
-            was_first_trade=was_first_trade
+            was_first_trade=was_first_trade,
+            steps_since_last_trade_before=steps_since_last_trade_before,
+            position_mgmt_action=position_mgmt_action
         )
         
         # Include position management info in info dict for logging/tracking

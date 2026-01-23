@@ -343,6 +343,10 @@ initial_training_fixed_reward = _reward_shaping.get("initial_training_fixed_rewa
 no_trade_penalty_scale = _reward_shaping.get("no_trade_penalty_scale", 0.1) if _reward_shaping else 0.1
 aggressive_trading_bonus = _reward_shaping.get("aggressive_trading_bonus", 1.0) if _reward_shaping else 1.0
 risk_taking_multiplier = _reward_shaping.get("risk_taking_multiplier", 1.5) if _reward_shaping else 1.5
+trading_cooldown_penalty_scale = _reward_shaping.get("trading_cooldown_penalty_scale", 1.0) if _reward_shaping else 1.0
+trading_cooldown_steps = _reward_shaping.get("trading_cooldown_steps", 5) if _reward_shaping else 5
+sell_reward_bonus = _reward_shaping.get("sell_reward_bonus", 0.0) if _reward_shaping else 0.0
+end_position_penalty_scale = _reward_shaping.get("end_position_penalty_scale", 5.0) if _reward_shaping else 5.0
 
 # BTC-specific settings
 initial_capital = _btc_settings.get("initial_capital") if _btc_settings else None

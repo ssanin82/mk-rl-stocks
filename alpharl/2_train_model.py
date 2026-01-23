@@ -406,7 +406,7 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
         "policy": policy_name,
         "policy_kwargs": policy_kwargs,
         "env": env_train,
-        "verbose": 1,
+        "verbose": 0,
         "learning_rate": 3e-4,
         "n_steps": n_steps,
         "batch_size": batch_size,
@@ -511,7 +511,8 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
         phase1_callbacks = [progress_callback, forced_buy_callback]
         model.learn(
             total_timesteps=phase1_timesteps,
-            callback=phase1_callbacks
+            callback=phase1_callbacks,
+            progress_bar=False
         )
         
         if phase2_timesteps > 0:
@@ -520,13 +521,15 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
             model.learn(
                 total_timesteps=phase2_timesteps,
                 callback=progress_callback,
-                reset_num_timesteps=False  # Continue from Phase 1
+                reset_num_timesteps=False,  # Continue from Phase 1
+                progress_bar=False
             )
     else:
         # Standard training without curriculum
         model.learn(
             total_timesteps=training_timesteps,
-            callback=progress_callback
+            callback=progress_callback,
+            progress_bar=False
         )
     
     if tensorboard_available:

@@ -1,7 +1,0 @@
-{
-  "include": "settings.json",
-  "config_name": "settings_ltsm",
-  "common": {
-    "use_lstm_policy": true
-  }
-}

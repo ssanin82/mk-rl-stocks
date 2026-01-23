@@ -1,8 +1,12 @@
 # AlphaRL: Reinforcement Learning Trading Strategy Simulator
+<img src="Screenshot-alphalr.png" alt="screenshot" style="width: 50%; max-width: 100%;">
 
 A reinforcement learning-based stock trading simulator that uses PPO (Proximal Policy Optimization) to train an agent to make buy/sell decisions. Features an interactive dark-themed dashboard with performance metrics and visualizations.
 
 ## Features
+
+<div style="display: flex; align-items: flex-start; gap: 20px;">
+<div style="flex: 1;">
 
 - 📈 **RL-powered trading** using Stable-Baselines3 PPO algorithm
 - 📊 **Interactive visualizations** with Plotly and Dash
@@ -10,6 +14,14 @@ A reinforcement learning-based stock trading simulator that uses PPO (Proximal P
 - 💰 **Performance metrics** including P&L, returns, drawdown, and volatility
 - 🌙 **Dark theme** dashboard
 - 🚀 **Live web server** for real-time monitoring
+
+</div>
+<div style="flex: 1; text-align: center;">
+
+<img src="AlphaLR-mkt-dashboard.png" alt="AlphaRL Market Dashboard" style="max-width: 50%; height: auto;">
+
+</div>
+</div>
 
 ## Screenshots
 
@@ -28,7 +40,7 @@ The dashboard displays:
 1. Clone the repository:
 ```bash
 git clone <your-repo-url>
-cd alpharl
+cd mk-rl-stocks
 ```
 
 2. Create a virtual environment:
@@ -72,7 +84,7 @@ Press `Ctrl+C` to stop the server.
 
 ## Configuration
 
-All configuration parameters are defined in `settings.json`. The configuration file is organized into two main sections: `common` (applies to all strategies) and `btc` (BTC/USDT-specific settings).
+All configuration parameters are defined in `config/settings.json`. Configuration files are stored in the `config/` folder, and trained models are saved in the `models/` folder. The configuration file is organized into two main sections: `common` (applies to all strategies) and `btc` (BTC/USDT-specific settings).
 
 ### Table of Contents
 
@@ -101,8 +113,8 @@ These settings apply to all trading strategies and control data, training, and m
 
 #### `n_price_points`
 - **Type**: `integer`
-- **Default**: `100000`
-- **Description**: Total number of price data points to generate or use for training and testing. The first `train_split_ratio × n_price_points` points are used for training, and the remaining points are used for testing/evaluation.
+- **Default**: `20000`
+- **Description**: Total number of price data points to generate or use for training and testing. The first `train_split_ratio × n_price_points` points are used for training, and the remaining points are used for testing/evaluation. Lower values (10,000-20,000) enable faster training while maintaining quality.
 
 #### `default_prices_file`
 - **Type**: `string`
@@ -111,8 +123,8 @@ These settings apply to all trading strategies and control data, training, and m
 
 #### `training_episodes`
 - **Type**: `integer`
-- **Default**: `100`
-- **Description**: Number of training episodes for the RL model. Each episode runs through the entire training dataset. Higher values provide more training but take longer. Typical values range from 10-100 depending on dataset size and desired training time.
+- **Default**: `50`
+- **Description**: Number of training episodes for the RL model. Each episode runs through the entire training dataset. Higher values provide more training but take longer. Typical values range from 10-100 depending on dataset size and desired training time. Lower values (20-50) enable faster iteration while still providing sufficient training.
 
 #### `train_split_ratio`
 - **Type**: `float`
@@ -122,7 +134,7 @@ These settings apply to all trading strategies and control data, training, and m
 #### `default_model_file`
 - **Type**: `string`
 - **Default**: `"trading_model.zip"`
-- **Description**: Filename where the trained model is saved (by `2_train_model.py`) and loaded (by `3_run_model.py`). Uses Stable-Baselines3's model format.
+- **Description**: Filename where the trained model is saved (by `2_train_model.py`) and loaded (by `3_run_model.py`). Models are saved in the `models/` folder. Uses Stable-Baselines3's model format. When training multiple configurations, models are saved as `models/model_<config_name>.zip`.
 
 #### `price_history_window`
 - **Type**: `integer`
@@ -203,13 +215,13 @@ These settings control the reward function that guides the RL agent's learning. 
 
 #### `incremental_reward_scale`
 - **Type**: `float`
-- **Default**: `5000`
-- **Description**: Scale factor for incremental portfolio value changes. Portfolio changes are multiplied by this factor to make them the dominant learning signal. For BTC, small price movements (0.01%) translate to tiny rewards without scaling. Higher values (5000+) make portfolio changes more impactful relative to fixed trade rewards. Typical range: 1000-10000.
+- **Default**: `500`
+- **Description**: Scale factor for incremental portfolio value changes. Portfolio changes are multiplied by this factor to make them meaningful learning signals. For BTC, small price movements (0.01%) translate to tiny rewards without scaling. Lower values (100-500) prevent portfolio changes from dominating rewards and encourage selective trading. Higher values (1000-5000) make portfolio changes more impactful. Typical range: 100-5000.
 
 #### `trade_execution_reward`
 - **Type**: `float`
-- **Default**: `0.5`
-- **Description**: Base reward given when a trade is executed. This reward is conditional—only applied if the trade improves portfolio value or aligns with price momentum. Prevents overtrading for the sake of fixed rewards. The actual reward may be scaled by trade notional value. Typical range: 0.1-1.0.
+- **Default**: `-2.0`
+- **Description**: Base penalty (negative value) applied when a trade is executed. This discourages overtrading by making each trade costly unless it clearly improves the portfolio. The penalty is multiplied by `risk_taking_multiplier`. Negative values (penalties) encourage selective trading, while positive values (rewards) encourage more frequent trading. Typical range: -5.0 to 0.5.
 
 #### `end_episode_reward_scale`
 - **Type**: `float`
@@ -220,18 +232,18 @@ These settings control the reward function that guides the RL agent's learning. 
 
 #### `momentum_reward_scale`
 - **Type**: `float`
-- **Default**: `0.3`
-- **Description**: Scale factor for momentum-based rewards. Rewards trading in the direction of price movement (buying when price rises, selling when price falls) and penalizes trading against momentum. Uses exponential scaling for stronger momentum signals. Higher values make momentum alignment more valuable. Typical range: 0.1-0.5.
+- **Default**: `0.1`
+- **Description**: Scale factor for momentum-based rewards. Rewards trading in the direction of price movement (buying when price rises, selling when price falls) and penalizes trading against momentum. Uses exponential scaling for stronger momentum signals. Lower values (0.1-0.2) prevent momentum rewards from encouraging trading on every small price movement. Higher values (0.3-0.5) make momentum alignment more valuable. Typical range: 0.1-0.5.
 
 #### `hold_profit_reward_scale`
 - **Type**: `float`
-- **Default**: `0.02`
-- **Description**: Scale factor for rewards when holding profitable positions. Prevents premature exit from winning trades by providing a small reward proportional to profit ratio and position size. Only applies when position is in profit (>1% above entry). Typical range: 0.01-0.05.
+- **Default**: `0.5`
+- **Description**: Scale factor for rewards when holding profitable positions. Prevents premature exit from winning trades by providing a reward proportional to profit ratio and position size. Higher values (0.5-1.0) strongly encourage holding profitable positions rather than overtrading. Only applies when position is in profit (>1% above entry). Typical range: 0.02-1.0.
 
 #### `entry_quality_reward_scale`
 - **Type**: `float`
-- **Default**: `0.5`
-- **Description**: Scale factor for rewards when entering positions at favorable prices. Rewards mean reversion entries (buying below recent average) and momentum entries (buying after price drops, selling after price rises). Encourages strategic entry timing. Typical range: 0.02-0.1.
+- **Default**: `0.2`
+- **Description**: Scale factor for rewards when entering positions at favorable prices. Rewards mean reversion entries (buying below recent average) and momentum entries (buying after price drops, selling after price rises). Lower values (0.1-0.2) prevent quality rewards from encouraging trading on every small dip. Higher values (0.5-1.0) make entry quality more valuable. Typical range: 0.1-1.0.
 
 #### Risk Management
 
@@ -261,8 +273,8 @@ These settings encourage active trading and exploration.
 
 #### `entry_incentive_reward`
 - **Type**: `float`
-- **Default**: `5.0`
-- **Description**: Large reward for first buy when position is 0. This helps overcome the initial exploration problem by strongly incentivizing the model to make its first trade. Multiplied by `risk_taking_multiplier`. Typical range: 2.0-10.0.
+- **Default**: `2.0`
+- **Description**: Reward for first buy when position is 0. This helps overcome the initial exploration problem by incentivizing the model to make its first trade. Multiplied by `risk_taking_multiplier`. Lower values (1.0-2.0) provide moderate encouragement without being excessive. Typical range: 1.0-10.0.
 
 #### `pre_trade_buy_incentive`
 - **Type**: `float`
@@ -281,8 +293,8 @@ These settings encourage active trading and exploration.
 
 #### `risk_taking_multiplier`
 - **Type**: `float`
-- **Default**: `1.5`
-- **Description**: Multiplier applied to most reward/penalty components. Higher values make the model more risk-taking and aggressive. Values > 1.0 amplify rewards and penalties, encouraging more active trading. Typical range: 1.0-2.0.
+- **Default**: `1.0`
+- **Description**: Multiplier applied to most reward/penalty components. Values > 1.0 amplify rewards and penalties, encouraging more active trading. Values < 1.0 reduce the impact of rewards/penalties, making the model more conservative. A value of 1.0 provides neutral scaling. Typical range: 0.3-2.0.
 
 #### Penalties
 
@@ -313,15 +325,35 @@ These settings penalize undesirable behaviors.
 - **Default**: `0.1`
 - **Description**: Penalty scale for not trading. Applied when the model has never traded or has gone many steps without trading. Creates accumulating penalty that grows over time. Typical range: 0.05-0.2.
 
+#### `trading_cooldown_penalty_scale`
+- **Type**: `float`
+- **Default**: `1.0`
+- **Description**: Penalty scale for trading too frequently. Applied when a trade is executed within `trading_cooldown_steps` of the previous trade. The penalty scales with how recent the last trade was, discouraging rapid-fire trading. Higher values (1.0-5.0) strongly discourage overtrading. Typical range: 0.5-5.0.
+
+#### `trading_cooldown_steps`
+- **Type**: `integer`
+- **Default**: `5`
+- **Description**: Minimum number of steps that must pass between trades before the cooldown penalty is not applied. Trades executed within this window receive a penalty proportional to how recent the previous trade was. Higher values (5-20) enforce longer cooldown periods. Typical range: 3-20.
+
+#### `sell_reward_bonus`
+- **Type**: `float`
+- **Default**: `0.0`
+- **Description**: Bonus reward for executing SELL actions. Encourages the model to sell during the episode rather than holding positions indefinitely. Applied when a SELL action is executed (including position management profit-taking sells). Higher values (0.5-2.0) strongly encourage selling. Set to 0.0 to disable. Typical range: 0.0-2.0.
+
+#### `end_position_penalty_scale`
+- **Type**: `float`
+- **Default**: `5.0`
+- **Description**: Scale factor for penalties when ending an episode with non-zero holdings. The penalty is applied in two ways: (1) during the last 10% of the episode when holdings > 0, and (2) at episode end if holdings > 0. Higher values (10.0-20.0) strongly discourage ending with open positions. This encourages the model to close positions before the episode ends. Typical range: 5.0-20.0.
+
 #### `has_position_reward`
 - **Type**: `float`
-- **Default**: `0.02`
-- **Description**: Small positive reward each step when a position exists. Encourages the model to maintain positions rather than staying in cash. Applied every step when holdings > 0. Typical range: 0.01-0.05.
+- **Default**: `0.05`
+- **Description**: Small positive reward each step when a position exists. Encourages the model to maintain positions rather than staying in cash. Applied every step when holdings > 0. Set to 0.0 to remove this incentive. Typical range: 0.0-0.05.
 
 #### `initial_training_fixed_reward`
 - **Type**: `float`
-- **Default**: `1.0`
-- **Description**: Fixed reward during initial training phase. Helps bootstrap learning in early episodes when the model is still exploring. Typical range: 0.5-2.0.
+- **Default**: `0.5`
+- **Description**: Fixed reward during initial training phase. Helps bootstrap learning in early episodes when the model is still exploring. Lower values (0.2-0.5) provide moderate encouragement. Typical range: 0.2-2.0.
 
 ## BTC-Specific Settings
 
@@ -459,42 +491,42 @@ The configuration system uses three key concepts:
    - Lists and primitive values are replaced entirely (not merged)
 
 3. **Layered Configuration** (the conceptual model): Think of it as layers:
-   - **Layer 1 (Base)**: `settings.json` - Contains all default settings
-   - **Layer 2 (Override)**: `settings_half_aggressive.json` - Overrides specific values
-   - **Layer 3 (Further Override)**: `settings_ltsm_ha.json` - Overrides values from Layer 2
+   - **Layer 1 (Base)**: `config/settings.json` - Contains all default settings
+   - **Layer 2 (Override)**: `config/half_aggressive.json` - Overrides specific values
+   - **Layer 3 (Further Override)**: `config/ltsm_ha.json` - Overrides values from Layer 2
    - Final result: All layers merged, with later layers taking precedence
 
 #### Single-Stage Inheritance Example
 
 ```json
-// settings.json (base)
+// config/settings.json (base)
 {
   "config_name": "base",
   "common": {
     "ent_coef": 0.3,
     "reward_shaping": {
-      "trade_execution_reward": 0.5,
-      "entry_incentive_reward": 5.0,
-      "momentum_reward_scale": 0.3
+      "trade_execution_reward": -2.0,
+      "entry_incentive_reward": 2.0,
+      "momentum_reward_scale": 0.1
     }
   }
 }
 
-// settings_half_aggressive.json
+// config/half_aggressive.json
 {
   "include": "settings.json",
   "config_name": "half_aggressive",
   "common": {
     "ent_coef": 0.15,
     "reward_shaping": {
-      "trade_execution_reward": 0.25,
-      "entry_incentive_reward": 2.5
+      "trade_execution_reward": -1.0,
+      "entry_incentive_reward": 1.5
     }
   }
 }
 ```
 
-**Result for `settings_half_aggressive.json`:**
+**Result for `config/half_aggressive.json`:**
 ```json
 {
   "config_name": "half_aggressive",
@@ -514,33 +546,33 @@ The configuration system uses three key concepts:
 The system supports **unlimited nesting levels**. For example:
 
 ```json
-// settings.json (base layer)
+// config/settings.json (base layer)
 {
   "config_name": "base",
   "common": {
     "ent_coef": 0.3,
     "use_lstm_policy": false,
     "reward_shaping": {
-      "trade_execution_reward": 0.5
+      "trade_execution_reward": -2.0
     }
   }
 }
 
-// settings_half_aggressive.json (layer 2)
+// config/half_aggressive.json (layer 2)
 {
   "include": "settings.json",
   "config_name": "half_aggressive",
   "common": {
     "ent_coef": 0.15,
     "reward_shaping": {
-      "trade_execution_reward": 0.25
+      "trade_execution_reward": -1.0
     }
   }
 }
 
-// settings_ltsm_ha.json (layer 3)
+// config/ltsm_ha.json (layer 3)
 {
-  "include": "settings_half_aggressive.json",
+  "include": "half_aggressive.json",
   "config_name": "ltsm_ha",
   "common": {
     "use_lstm_policy": true
@@ -548,7 +580,7 @@ The system supports **unlimited nesting levels**. For example:
 }
 ```
 
-**Result for `settings_ltsm_ha.json`:**
+**Result for `config/ltsm_ha.json`:**
 ```json
 {
   "config_name": "ltsm_ha",
@@ -595,9 +627,9 @@ The system supports **unlimited nesting levels**. For example:
 
 #### Best Practices
 
-1. **Base Configuration**: Keep `settings.json` as the comprehensive base with all defaults
-2. **Variant Files**: Create variant files that only define differences
-3. **Naming Convention**: Use descriptive names like `settings_<feature>_<variant>.json`
+1. **Base Configuration**: Keep `config/settings.json` as the comprehensive base with all defaults
+2. **Variant Files**: Create variant files in `config/` folder that only define differences
+3. **Naming Convention**: Use descriptive names like `<feature>_<variant>.json` (e.g., `half_aggressive.json`, `fast_conservative.json`). The `settings_` prefix is optional and only used for the base `settings.json` file.
 4. **Documentation**: Comment complex inheritance chains in your config files
 5. **Avoid Circular Dependencies**: The system detects and prevents circular includes, but avoid creating them for clarity
 6. **Layer Depth**: While unlimited depth is supported, keep inheritance chains reasonable (2-4 levels) for maintainability
@@ -684,9 +716,9 @@ Here's a complete example `settings.json` file with all parameters:
 {
   "config_name": "base",
   "common": {
-    "n_price_points": 100000,
+    "n_price_points": 20000,
     "default_prices_file": "btc_usdt_1m_prices.txt",
-    "training_episodes": 100,
+    "training_episodes": 50,
     "train_split_ratio": 0.9,
     "default_model_file": "trading_model.zip",
     "price_history_window": 10,
@@ -706,28 +738,32 @@ Here's a complete example `settings.json` file with all parameters:
       "forced_initial_buy_size": 0.001
     },
     "reward_shaping": {
-      "incremental_reward_scale": 5000,
-      "trade_execution_reward": 0.5,
-      "momentum_reward_scale": 0.3,
-      "hold_profit_reward_scale": 0.02,
-      "entry_quality_reward_scale": 0.5,
+      "incremental_reward_scale": 500,
+      "trade_execution_reward": -2.0,
+      "momentum_reward_scale": 0.1,
+      "hold_profit_reward_scale": 0.5,
+      "entry_quality_reward_scale": 0.2,
       "end_episode_reward_scale": 10,
       "sharpe_reward_scale": 0.1,
       "drawdown_penalty_scale": 2.0,
       "position_sizing_reward_scale": 0.01,
       "pnl_penalty_scale": 10,
-      "entry_incentive_reward": 5.0,
+      "entry_incentive_reward": 2.0,
       "invalid_sell_penalty": -1000.0,
       "no_position_hold_penalty": -0.5,
-      "has_position_reward": 0.02,
+      "has_position_reward": 0.05,
       "full_cash_no_position_penalty": -1.0,
       "steps_since_trade_penalty_scale": 0.05,
-      "pre_trade_buy_incentive": 2.0,
-      "exploration_bonus": 0.5,
-      "initial_training_fixed_reward": 1.0,
+      "pre_trade_buy_incentive": 1.0,
+      "exploration_bonus": 0.2,
+      "initial_training_fixed_reward": 0.5,
       "no_trade_penalty_scale": 0.1,
-      "aggressive_trading_bonus": 1.0,
-      "risk_taking_multiplier": 1.5
+      "aggressive_trading_bonus": 0.5,
+      "risk_taking_multiplier": 1.0,
+      "trading_cooldown_penalty_scale": 1.0,
+      "trading_cooldown_steps": 5,
+      "sell_reward_bonus": 0.0,
+      "end_position_penalty_scale": 5.0
     }
   },
   "btc": {
@@ -737,12 +773,12 @@ Here's a complete example `settings.json` file with all parameters:
     "trading_fee_rate": 0.0001,
     "profit_threshold": 0.002,
     "partial_sell_ratio": 0.002,
-    "dca_threshold": 0.02,
+    "dca_threshold": 0.05,
     "dca_ratio": 0.02,
     "lot_size": 0.001,
     "normalization_method": "log_returns",
     "percentage_changes_step": 0.001,
-    "log_returns_step": 0.1,
+    "log_returns_step": 0.3,
     "z-score_step": 1.1,
     "price_ratio_step": 0.01,
     "dca_volatility_window": 20,
@@ -949,9 +985,15 @@ The `TradingEnv` is a custom Gymnasium environment with:
 │   ├── 2_train_model.py      # Train RL model
 │   ├── 3_run_model.py        # Run trained model
 │   ├── env.py                # Trading environment
+│   ├── settings.py           # Settings loader with inheritance
 │   ├── utils.py              # Utility functions
 │   └── web.py                # Visualization
-├── settings.json        # Configuration file
+├── config/             # Configuration files
+│   ├── settings.json         # Base configuration
+│   ├── half_aggressive.json  # Example variant config
+│   └── ...                   # Other variant configs
+├── models/              # Trained model archives
+│   └── model_<config_name>.zip  # Saved models
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file
 ```

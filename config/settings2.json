@@ -1,0 +1,15 @@
+{
+  "include": "settings.json",
+  "config_name": "settings2",
+  "common": {
+    "reward_shaping": {
+      "trade_execution_reward": -1.0,
+      "hold_profit_reward_scale": 0.1,
+      "end_episode_reward_scale": 15,
+      "pnl_penalty_scale": 30,
+      "has_position_reward": 0.0,
+      "sell_reward_bonus": 1.0,
+      "end_position_penalty_scale": 10.0
+    }
+  }
+}
