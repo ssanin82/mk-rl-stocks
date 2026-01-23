@@ -5,7 +5,7 @@ Trading environment for reinforcement learning.
 import sys
 import gymnasium as gym
 import numpy as np
-from mkrl.settings import (
+from alpharl.settings import (
     profit_threshold, partial_sell_ratio, dca_threshold, dca_ratio,
     lot_size, price_history_window, normalization_method,
     percentage_changes_step, log_returns_step, z_score_step, price_ratio_step,
@@ -20,7 +20,7 @@ from mkrl.settings import (
     initial_training_fixed_reward, no_trade_penalty_scale, aggressive_trading_bonus,
     risk_taking_multiplier
 )
-from mkrl.utils import normalize_prices, NormalizationMethod
+from alpharl.utils import normalize_prices, NormalizationMethod
 
 
 class TradingEnv(gym.Env):

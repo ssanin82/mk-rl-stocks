@@ -1,4 +1,4 @@
-# RL Trading Strategy Simulator
+# AlphaRL: Reinforcement Learning Trading Strategy Simulator
 
 A reinforcement learning-based stock trading simulator that uses PPO (Proximal Policy Optimization) to train an agent to make buy/sell decisions. Features an interactive dark-themed dashboard with performance metrics and visualizations.
 
@@ -28,7 +28,7 @@ The dashboard displays:
 1. Clone the repository:
 ```bash
 git clone <your-repo-url>
-cd mk-rl-stocks
+cd alpharl
 ```
 
 2. Create a virtual environment:
@@ -105,7 +105,7 @@ The `TradingEnv` is a custom Gymnasium environment with:
 
 ```
 .
-├── mkrl/                # Main package
+├── alpharl/            # Main package
 │   ├── 1_generate_prices.py  # Generate synthetic price data
 │   ├── 2_train_model.py      # Train RL model
 │   ├── 3_run_model.py        # Run trained model

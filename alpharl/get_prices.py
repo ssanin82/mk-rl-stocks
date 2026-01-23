@@ -14,7 +14,7 @@ if __name__ == "__main__":
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from mkrl.settings import n_price_points
+from alpharl.settings import n_price_points
 
 BASE_URL = "https://fapi.binance.com"
 SYMBOL = "BTCUSDT"

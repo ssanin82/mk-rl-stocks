@@ -16,14 +16,14 @@ else:
     requirements = []
 
 setup(
-    name="mk-rl-stocks",
+    name="alpharl",
     version="0.1.0",
     author="Sergiy Sanin",
     author_email="sanin_sergiy@yahoo.com",
-    description="A reinforcement learning-based stock trading simulator using PPO",
+    description="AlphaRL: Reinforcement Learning Trading Strategy Simulator using PPO",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/mk-rl-stocks",
+    url="https://github.com/yourusername/alpharl",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",

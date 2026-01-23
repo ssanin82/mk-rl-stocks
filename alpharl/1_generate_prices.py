@@ -13,8 +13,8 @@ if __name__ == "__main__":
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from mkrl.settings import n_price_points, default_prices_file
-from mkrl.utils import realistic_price_feed
+from alpharl.settings import n_price_points, default_prices_file
+from alpharl.utils import realistic_price_feed
 
 
 def main():

@@ -18,10 +18,10 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from stable_baselines3 import PPO
-from mkrl.env import TradingEnv
-from mkrl.utils import calculate_metrics
-from mkrl.web import create_static_html
-import mkrl.settings as settings_module
+from alpharl.env import TradingEnv
+from alpharl.utils import calculate_metrics
+from alpharl.web import create_static_html
+import alpharl.settings as settings_module
 
 
 def load_prices(prices_file):
@@ -112,7 +112,7 @@ def run_model_for_config(model_file: str, prices_file: str, split: float):
     settings_module.load_settings(settings_file)
     
     # Import settings after reload
-    from mkrl.settings import (
+    from alpharl.settings import (
         initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
         default_prices_file, train_split_ratio,
         curriculum_forced_buy_delay, curriculum_forced_buy_size
@@ -717,7 +717,7 @@ def main():
     
     # Load default settings to get default values for prices, split
     settings_module.load_settings("settings.json")
-    from mkrl.settings import default_prices_file, train_split_ratio
+    from alpharl.settings import default_prices_file, train_split_ratio
     
     prices_file = args.prices or default_prices_file
     split = args.split if args.split is not None else train_split_ratio

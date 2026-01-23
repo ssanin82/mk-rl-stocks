@@ -5,7 +5,7 @@ Utility functions for trading strategy execution and metrics calculation.
 import numpy as np
 import sys
 from enum import Enum
-from mkrl.settings import n_price_points
+from alpharl.settings import n_price_points
 
 
 class NormalizationMethod(str, Enum):

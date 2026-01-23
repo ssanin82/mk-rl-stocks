@@ -19,10 +19,10 @@ if __name__ == "__main__":
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
-from mkrl.env import TradingEnv
+from alpharl.env import TradingEnv
 import torch
-from mkrl.utils import format_time, normalize_prices, NormalizationMethod
-import mkrl.settings as settings_module
+from alpharl.utils import format_time, normalize_prices, NormalizationMethod
+import alpharl.settings as settings_module
 
 
 def create_training_complete_html(training_time, model_path, train_prices_count, episodes, training_timesteps):
@@ -201,7 +201,7 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
     settings_module.load_settings(settings_file)
     
     # Import settings after reload
-    from mkrl.settings import (
+    from alpharl.settings import (
         initial_capital, min_notional, min_size, trading_fee_rate, lot_size,
         training_episodes, default_prices_file, train_split_ratio,
         use_lstm_policy, normalization_method, ent_coef,
@@ -559,7 +559,7 @@ def main():
     
     # Load default settings to get default values for prices, episodes, split
     settings_module.load_settings(settings_files[0])
-    from mkrl.settings import default_prices_file, training_episodes, train_split_ratio
+    from alpharl.settings import default_prices_file, training_episodes, train_split_ratio
     
     prices_file = args.prices or default_prices_file
     episodes = args.episodes or training_episodes
