@@ -3,7 +3,7 @@
   "common": {
     "n_price_points": 100000,
     "default_prices_file": "btc_usdt_1m_prices.txt",
-    "training_episodes": 50,
+    "training_episodes": 100,
     "train_split_ratio": 0.9,
     "default_model_file": "trading_model.zip",
     "price_history_window": 10,
@@ -54,7 +54,7 @@
     "trading_fee_rate": 0.0001,
     "profit_threshold": 0.002,
     "partial_sell_ratio": 0.002,
-    "dca_threshold": 0.002,
+    "dca_threshold": 0.02,
     "dca_ratio": 0.02,
     "lot_size": 0.001,
     "normalization_method": "log_returns",

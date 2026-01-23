@@ -46,6 +46,50 @@ def load_prices(prices_file):
     return np.array(prices)
 
 
+def _find_model_file(model_file: str) -> Path:
+    """
+    Find a model file, checking models/ folder first, then root directory.
+    
+    Args:
+        model_file: Path to model file (may be relative or absolute)
+    
+    Returns:
+        Path to the found model file
+    
+    Raises:
+        FileNotFoundError: If the model file is not found
+    """
+    model_path = Path(model_file)
+    
+    # If absolute path, use as-is
+    if model_path.is_absolute():
+        if model_path.exists():
+            return model_path
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    # Try models/ folder first
+    models_dir = Path(__file__).parent.parent / "models"
+    models_path = models_dir / model_path.name
+    if models_path.exists():
+        return models_path
+    
+    # Try root directory
+    root_path = Path(__file__).parent.parent / model_path.name
+    if root_path.exists():
+        return root_path
+    
+    # Try as-is (might be relative to current working directory)
+    if model_path.exists():
+        return model_path.resolve()
+    
+    # Try with models/ prefix
+    models_prefixed = models_dir / model_path
+    if models_prefixed.exists():
+        return models_prefixed
+    
+    raise FileNotFoundError(f"Model file not found: {model_file} (checked models/{model_path.name}, {model_path.name}, and {model_path})")
+
+
 def extract_config_name_from_model(model_path: str) -> str:
     """
     Extract config name from model filename.
@@ -70,20 +114,20 @@ def extract_config_name_from_model(model_path: str) -> str:
 def find_settings_file_for_config(config_name: str) -> str:
     """
     Find the settings file for a given config name.
-    Returns the settings file path.
+    Returns the settings file path (looks in config/ folder).
     """
     if config_name == "base":
-        return "settings.json"
+        return "config/settings.json"
     else:
-        # Try settings_<config_name>.json
-        settings_file = f"settings_{config_name}.json"
+        # Try config/settings_<config_name>.json
+        settings_file = f"config/settings_{config_name}.json"
         settings_path = Path(settings_file)
         if settings_path.exists():
             return str(settings_path)
         else:
             # Fallback to base settings
-            print(f"  ⚠ Warning: Settings file {settings_file} not found, using settings.json")
-            return "settings.json"
+            print(f"  ⚠ Warning: Settings file {settings_file} not found, using config/settings.json")
+            return "config/settings.json"
 
 
 def run_model_for_config(model_file: str, prices_file: str, split: float):
@@ -128,10 +172,8 @@ def run_model_for_config(model_file: str, prices_file: str, split: float):
     test_prices = all_prices[split_idx:]
     print(f"  Using last {len(test_prices)} prices ({(1-split)*100:.0f}%) for testing")
     
-    # Load model
-    model_path = Path(model_file)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}")
+    # Load model (find in models/ folder first)
+    model_path = _find_model_file(model_file)
     
     print(f"\nLoading model from {model_path}...")
     model = PPO.load(str(model_path))
@@ -695,11 +737,11 @@ def main():
     """Run the model(s) on last 10% of prices."""
     parser = argparse.ArgumentParser(description='Run trained RL trading model(s)')
     parser.add_argument('--prices', '-p', type=str, default=None,
-                        help='Input prices file (default: from settings.json)')
+                        help='Input prices file (default: from config/settings.json)')
     parser.add_argument('--split', type=float, default=None,
-                        help='Training split ratio - test uses remaining (default: from settings.json)')
+                        help='Training split ratio - test uses remaining (default: from config/settings.json)')
     parser.add_argument('model_files', nargs='*',
-                        help='Model zip file(s) to run (default: model_base.zip)')
+                        help='Model zip file(s) to run (default: models/model_base.zip)')
     
     args = parser.parse_args()
     
@@ -707,8 +749,8 @@ def main():
     if args.model_files:
         model_files = args.model_files
     else:
-        # Default to model_base.zip
-        model_files = ["model_base.zip"]
+        # Default to models/model_base.zip
+        model_files = ["models/model_base.zip"]
     
     print(f"\n{'='*70}")
     print(f"RUNNING {len(model_files)} MODEL(S)")
@@ -716,7 +758,7 @@ def main():
     print(f"Model files: {', '.join(model_files)}")
     
     # Load default settings to get default values for prices, split
-    settings_module.load_settings("settings.json")
+    settings_module.load_settings("config/settings.json")
     from alpharl.settings import default_prices_file, train_split_ratio
     
     prices_file = args.prices or default_prices_file

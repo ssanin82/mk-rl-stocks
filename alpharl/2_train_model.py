@@ -21,7 +21,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from alpharl.env import TradingEnv
 import torch
-from alpharl.utils import format_time, normalize_prices, NormalizationMethod
+from alpharl.utils import format_time, NormalizationMethod
 import alpharl.settings as settings_module
 
 
@@ -118,10 +118,13 @@ def load_prices(prices_file):
 class TrainingProgressCallback(BaseCallback):
     """Callback to log training progress to file and console with in-place updates."""
     
-    def __init__(self, log_file, total_timesteps, verbose=0):
+    def __init__(self, log_file, total_timesteps, model_counter=None, total_models=None, config_name=None, verbose=0):
         super().__init__(verbose)
         self.log_file = log_file
         self.total_timesteps = total_timesteps
+        self.model_counter = model_counter
+        self.total_models = total_models
+        self.config_name = config_name
         self.start_time = time.time()
         self.last_log_time = self.start_time
         self.header_printed = False
@@ -156,9 +159,14 @@ class TrainingProgressCallback(BaseCallback):
             # Format elapsed time
             elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
             
+            # Create prefix with model counter and config name if available
+            prefix = ""
+            if self.model_counter is not None and self.total_models is not None and self.config_name:
+                prefix = f"[{self.model_counter}/{self.total_models}: {self.config_name}] "
+            
             # Create progress line
             progress_line = (
-                f"Step {self.num_timesteps:,}/{self.total_timesteps:,} "
+                f"{prefix}Step {self.num_timesteps:,}/{self.total_timesteps:,} "
                 f"({progress:.1f}%) | "
                 f"Elapsed: {elapsed_str} | "
                 f"ETA: {eta_str} | "
@@ -184,7 +192,8 @@ class TrainingProgressCallback(BaseCallback):
         return True
 
 
-def train_model_for_config(settings_file: str, prices_file: str, split: float, episodes: int):
+def train_model_for_config(settings_file: str, prices_file: str, split: float, episodes: int, 
+                          model_counter: int = None, total_models: int = None):
     """
     Train a single model for a given settings file.
     
@@ -193,6 +202,8 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
         prices_file: Path to prices file
         split: Train/test split ratio
         episodes: Number of training episodes
+        model_counter: Current model number (for multi-model training)
+        total_models: Total number of models (for multi-model training)
     
     Returns:
         Tuple of (config_name, model_path, training_time)
@@ -318,6 +329,9 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
     progress_callback = TrainingProgressCallback(
         log_file=None,  # No file logging
         total_timesteps=training_timesteps,
+        model_counter=model_counter,
+        total_models=total_models,
+        config_name=config_name,
         verbose=1
     )
     
@@ -523,8 +537,10 @@ def train_model_for_config(settings_file: str, prices_file: str, split: float, e
     training_time = time.time() - ts
     print(f"✓ Training complete for {config_name}! Took {format_time(training_time)}")
     
-    # Save model with config name
-    model_path = Path(f"model_{config_name}.zip")
+    # Save model with config name in models/ folder
+    models_dir = Path(__file__).parent.parent / "models"
+    models_dir.mkdir(exist_ok=True)  # Create models folder if it doesn't exist
+    model_path = models_dir / f"model_{config_name}.zip"
     model.save(str(model_path))
     print(f"✓ Model saved to {model_path.absolute()}")
     
@@ -535,13 +551,13 @@ def main():
     """Train the model(s) on first 90% of prices."""
     parser = argparse.ArgumentParser(description='Train RL trading model(s)')
     parser.add_argument('--prices', '-p', type=str, default=None,
-                        help='Input prices file (default: from settings.json)')
+                        help='Input prices file (default: from config/settings.json)')
     parser.add_argument('--episodes', '-e', type=int, default=None,
-                        help='Number of training episodes (default: from settings.json)')
+                        help='Number of training episodes (default: from config/settings.json)')
     parser.add_argument('--split', type=float, default=None,
-                        help='Training split ratio (default: from settings.json)')
+                        help='Training split ratio (default: from config/settings.json)')
     parser.add_argument('settings_files', nargs='*', 
-                        help='Settings JSON file(s) to use (default: settings.json)')
+                        help='Settings JSON file(s) to use (default: config/settings.json)')
     
     args = parser.parse_args()
     
@@ -549,8 +565,8 @@ def main():
     if args.settings_files:
         settings_files = args.settings_files
     else:
-        # Default to settings.json
-        settings_files = ["settings.json"]
+        # Default to config/settings.json
+        settings_files = ["config/settings.json"]
     
     print(f"\n{'='*70}")
     print(f"TRAINING {len(settings_files)} MODEL(S)")
@@ -577,7 +593,9 @@ def main():
                 settings_file=settings_file,
                 prices_file=prices_file,
                 split=split,
-                episodes=episodes
+                episodes=episodes,
+                model_counter=i,
+                total_models=len(settings_files)
             )
             results.append((config_name, model_path, training_time))
         except Exception as e:

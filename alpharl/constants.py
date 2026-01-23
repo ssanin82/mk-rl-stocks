@@ -32,5 +32,5 @@ DCA_RATIO = 0.01  # Add 10% to position when down threshold reached
 # Data split configuration
 TRAIN_SPLIT_RATIO = 0.9  # Use first 90% for training, last 10% for testing
 
-# Model files
-DEFAULT_MODEL_FILE = "trading_model.zip"
+# Model files (in models/ folder)
+DEFAULT_MODEL_FILE = "models/trading_model.zip"

@@ -1,14 +1,14 @@
 """
 Settings loader for the RL trading simulator.
-Loads configuration from settings.json file.
+Loads configuration from settings.json files in the config/ folder.
 """
 
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Default settings path
-_default_settings_path = Path(__file__).parent.parent / "settings.json"
+# Default settings path (in config folder)
+_default_settings_path = Path(__file__).parent.parent / "config" / "settings.json"
 
 # Global settings data (loaded lazily)
 _settings_data: Optional[Dict[str, Dict[str, Any]]] = None
@@ -16,24 +16,75 @@ _settings_path: Optional[Path] = None
 _config_name: Optional[str] = None
 
 
-def load_settings_with_inheritance(settings_file: str) -> Dict[str, Any]:
+def _find_settings_file(settings_file: str) -> Path:
     """
-    Load settings from a JSON file with inheritance support.
+    Find a settings file, checking config/ folder first, then root directory.
+    
+    Args:
+        settings_file: Path to settings file (may be relative or absolute)
+    
+    Returns:
+        Path to the found settings file
+    
+    Raises:
+        FileNotFoundError: If the settings file is not found
+    """
+    settings_path = Path(settings_file)
+    
+    # If absolute path, use as-is
+    if settings_path.is_absolute():
+        if settings_path.exists():
+            return settings_path
+        raise FileNotFoundError(f"Settings file not found: {settings_path}")
+    
+    # Try config/ folder first
+    config_path = Path(__file__).parent.parent / "config" / settings_path.name
+    if config_path.exists():
+        return config_path
+    
+    # Try root directory
+    root_path = Path(__file__).parent.parent / settings_path.name
+    if root_path.exists():
+        return root_path
+    
+    # Try as-is (might be relative to current working directory)
+    if settings_path.exists():
+        return settings_path.resolve()
+    
+    # Try with config/ prefix
+    config_prefixed = Path(__file__).parent.parent / "config" / settings_path
+    if config_prefixed.exists():
+        return config_prefixed
+    
+    raise FileNotFoundError(f"Settings file not found: {settings_file} (checked config/{settings_path.name}, {settings_path.name}, and {settings_path})")
+
+
+def load_settings_with_inheritance(settings_file: str, processing: Optional[set] = None) -> Dict[str, Any]:
+    """
+    Load settings from a JSON file with multi-stage inheritance support.
     
     If a settings file contains an "include" field pointing to another settings file,
-    that file is loaded first, and then values from the current file override the
-    included settings (deep merge).
+    that file is loaded first (recursively, supporting nested includes), and then values
+    from the current file override the included settings using deep merge.
     
-    This allows for layered configuration where base settings can be inherited
-    and selectively overridden.
+    This implements a layered configuration pattern where:
+    - Base settings can be inherited and selectively overridden
+    - Multi-stage inheritance is supported (e.g., A includes B, B includes C)
+    - Deep merging ensures nested dictionaries are merged recursively
+    - Override values take precedence over inherited values
+    - Circular dependencies are detected and prevented
     
     Args:
         settings_file: Path to the settings file to load
+        processing: Set of file paths currently being processed (for circular dependency detection)
     
     Returns:
         Dictionary containing merged settings (with "include" key removed)
     
-    Example:
+    Raises:
+        ValueError: If a circular dependency is detected
+    
+    Example (single-stage):
         base.json:
         {
             "config_name": "base",
@@ -54,10 +105,47 @@ def load_settings_with_inheritance(settings_file: str) -> Dict[str, Any]:
             "common": {"param1": "xyz", "param2": "def"},
             "btc": {"param3": "ghi"}
         }
+    
+    Example (multi-stage):
+        settings.json (base):
+        {
+            "config_name": "base",
+            "common": {"param1": "abc", "param2": "def"}
+        }
+        
+        settings_half_aggressive.json:
+        {
+            "include": "settings.json",
+            "config_name": "half_aggressive",
+            "common": {"param1": "xyz"}
+        }
+        
+        settings_ltsm_ha.json:
+        {
+            "include": "settings_half_aggressive.json",
+            "config_name": "ltsm_ha",
+            "common": {"use_lstm_policy": true}
+        }
+        
+        Result for settings_ltsm_ha.json:
+        {
+            "config_name": "ltsm_ha",
+            "common": {"param1": "xyz", "param2": "def", "use_lstm_policy": true}
+        }
     """
-    settings_path = Path(settings_file)
-    if not settings_path.exists():
-        raise FileNotFoundError(f"Settings file not found: {settings_path}")
+    # Find the settings file (checks config/ folder first)
+    settings_path = _find_settings_file(settings_file).resolve()
+    
+    # Initialize processing set for circular dependency detection
+    if processing is None:
+        processing = set()
+    
+    # Check for circular dependencies (file is already in the current processing chain)
+    if str(settings_path) in processing:
+        raise ValueError(f"Circular dependency detected in settings inheritance chain. File '{settings_path}' is included multiple times in the same inheritance path. Processing chain: {processing}")
+    
+    # Add current file to processing set (tracks current call stack)
+    processing.add(str(settings_path))
     
     # Load the current settings file
     with open(settings_path, 'r', encoding='utf-8') as f:
@@ -68,26 +156,43 @@ def load_settings_with_inheritance(settings_file: str) -> Dict[str, Any]:
         include_file = current_settings["include"]
         
         # Resolve include path relative to current file's directory
+        # If not absolute, try relative to current file's directory first
         if not Path(include_file).is_absolute():
+            # First try relative to current file's directory (for files in config/)
             include_path = settings_path.parent / include_file
+            if not include_path.exists():
+                # Fallback: try to find it using the helper (checks config/ and root)
+                try:
+                    include_path = _find_settings_file(include_file).resolve()
+                except FileNotFoundError:
+                    # If helper fails, use the relative path for error message
+                    include_path = settings_path.parent / include_file
         else:
-            include_path = Path(include_file)
+            include_path = Path(include_file).resolve()
         
         if not include_path.exists():
             raise FileNotFoundError(f"Included settings file not found: {include_path}")
         
-        # Recursively load the included settings (supports nested includes)
-        base_settings = load_settings_with_inheritance(str(include_path))
+        # Recursively load the included settings (supports multi-stage nested includes)
+        # This allows unlimited inheritance depth: A includes B, B includes C, etc.
+        # Pass processing set to detect circular dependencies
+        base_settings = load_settings_with_inheritance(str(include_path), processing)
         
         # Deep merge: base settings first, then override with current settings
+        # The deep merge ensures nested dictionaries are merged recursively
         merged_settings = _deep_merge_dicts(base_settings, current_settings)
         
         # Remove the "include" key from the final result
         merged_settings.pop("include", None)
         
+        # Remove from processing set when done (allows same file in different branches)
+        processing.remove(str(settings_path))
+        
         return merged_settings
     else:
         # No inheritance, return as-is
+        # Remove from processing set when done
+        processing.remove(str(settings_path))
         return current_settings
 
 
@@ -130,7 +235,7 @@ def load_settings(settings_file: Optional[str] = None) -> Dict[str, Any]:
     settings first and merge them with the current file's settings.
     
     Args:
-        settings_file: Path to settings file. If None, uses default settings.json
+        settings_file: Path to settings file. If None, uses default config/settings.json
     
     Returns:
         Dictionary containing all settings data (merged if inheritance is used)
@@ -138,9 +243,8 @@ def load_settings(settings_file: Optional[str] = None) -> Dict[str, Any]:
     global _settings_data, _settings_path, _config_name
     
     if settings_file:
-        settings_path = Path(settings_file)
-        if not settings_path.exists():
-            raise FileNotFoundError(f"Settings file not found: {settings_path}")
+        # Use helper to find settings file (checks config/ folder first)
+        settings_path = _find_settings_file(settings_file)
     else:
         settings_path = _default_settings_path
         if not settings_path.exists():
